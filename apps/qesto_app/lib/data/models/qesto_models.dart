@@ -24,23 +24,28 @@ class QestoUser {
     required this.name,
     required this.defaultCurrency,
     this.avatarUrl,
+    this.expenseDisplayCurrency = 'RUB',
   });
 
   final String id;
   final String name;
   final String defaultCurrency;
   final String? avatarUrl;
+  final String expenseDisplayCurrency;
 
   QestoUser copyWith({
     String? name,
     String? defaultCurrency,
     String? avatarUrl,
+    String? expenseDisplayCurrency,
     bool clearAvatar = false,
   }) => QestoUser(
     id: id,
     name: name ?? this.name,
     defaultCurrency: defaultCurrency ?? this.defaultCurrency,
     avatarUrl: clearAvatar ? null : avatarUrl ?? this.avatarUrl,
+    expenseDisplayCurrency:
+        expenseDisplayCurrency ?? this.expenseDisplayCurrency,
   );
 }
 
@@ -148,6 +153,8 @@ class SavingsGoal {
     required this.streakWeeks,
     required this.isActive,
     required this.history,
+    this.category = 'Другое',
+    this.targetDate,
   });
 
   final String id;
@@ -159,8 +166,34 @@ class SavingsGoal {
   final int streakWeeks;
   final bool isActive;
   final List<SavingsHistoryPoint> history;
+  final String category;
+  final DateTime? targetDate;
 
   double get progress => targetAmount == 0 ? 0 : savedAmount / targetAmount;
+
+  SavingsGoal copyWith({
+    String? title,
+    int? targetAmount,
+    int? savedAmount,
+    String? currency,
+    int? streakWeeks,
+    bool? isActive,
+    List<SavingsHistoryPoint>? history,
+    String? category,
+    DateTime? targetDate,
+  }) => SavingsGoal(
+    id: id,
+    userId: userId,
+    title: title ?? this.title,
+    targetAmount: targetAmount ?? this.targetAmount,
+    savedAmount: savedAmount ?? this.savedAmount,
+    currency: currency ?? this.currency,
+    streakWeeks: streakWeeks ?? this.streakWeeks,
+    isActive: isActive ?? this.isActive,
+    history: history ?? this.history,
+    category: category ?? this.category,
+    targetDate: targetDate ?? this.targetDate,
+  );
 }
 
 class FinancialAction {

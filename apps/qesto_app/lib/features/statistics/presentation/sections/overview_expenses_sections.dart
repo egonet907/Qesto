@@ -7,6 +7,7 @@ import '../../../../core/theme/qesto_theme.dart';
 import '../../../../core/widgets/qesto_card.dart';
 import '../../../../core/widgets/states.dart';
 import '../../../../data/models/qesto_models.dart';
+import '../../../profile/services/cbr_currency_service.dart';
 import '../../domain/models/statistics_models.dart';
 import '../screens/statistics_drilldown_screens.dart';
 import '../state/statistics_controller.dart';
@@ -122,22 +123,43 @@ class OverviewStatisticsSection extends StatelessWidget {
   }
 }
 
-class ExpensesStatisticsSection extends StatelessWidget {
+class ExpensesStatisticsSection extends StatefulWidget {
   const ExpensesStatisticsSection({
     required this.controller,
     required this.scrollController,
+    this.showCurrencySelector = false,
     super.key,
   });
 
   final StatisticsController controller;
   final ScrollController scrollController;
+  final bool showCurrencySelector;
+
+  @override
+  State<ExpensesStatisticsSection> createState() =>
+      _ExpensesStatisticsSectionState();
+}
+
+class _ExpensesStatisticsSectionState extends State<ExpensesStatisticsSection> {
+  late String _currency;
+
+  @override
+  void initState() {
+    super.initState();
+    final preferred =
+        widget.controller.budgetController.user.expenseDisplayCurrency;
+    _currency = CbrCurrencyService.expenseDisplayCurrencies.contains(preferred)
+        ? preferred
+        : 'RUB';
+  }
 
   @override
   Widget build(BuildContext context) {
+    final controller = widget.controller;
     final snapshot = controller.snapshot;
     if (snapshot.summary.purchaseCount == 0) {
       return ListView(
-        controller: scrollController,
+        controller: widget.scrollController,
         padding: const EdgeInsets.all(18),
         children: const [
           EmptyState(message: 'В выбранном периоде пока нет расходов'),
@@ -147,15 +169,22 @@ class ExpensesStatisticsSection extends StatelessWidget {
     final change = snapshot.summary.changePercent;
     final avgChange = snapshot.summary.averageCheckChange;
     return ListView(
-      controller: scrollController,
+      controller: widget.scrollController,
       key: const PageStorageKey('statistics-expenses'),
       padding: const EdgeInsets.fromLTRB(18, 14, 18, 30),
       children: [
+        if (widget.showCurrencySelector) ...[
+          _ExpenseCurrencySelector(
+            selected: _currency,
+            onSelected: _selectCurrency,
+          ),
+          const SizedBox(height: 16),
+        ],
         StatisticsMetricStrip(
           items: [
             StatisticsMetricItem(
               label: 'Расходы',
-              value: formatMoney(snapshot.summary.expenses, 'RUB'),
+              value: _money(snapshot.summary.expenses),
               caption: 'за выбранный период',
               icon: Icons.account_balance_wallet_outlined,
             ),
@@ -172,7 +201,7 @@ class ExpensesStatisticsSection extends StatelessWidget {
             ),
             StatisticsMetricItem(
               label: 'Средний чек',
-              value: formatMoney(snapshot.summary.averageCheck.round(), 'RUB'),
+              value: _money(snapshot.summary.averageCheck.round()),
               caption: avgChange == null
                   ? 'нет сравнения'
                   : '${avgChange >= 0 ? '↑' : '↓'} ${avgChange.abs().toStringAsFixed(1)}% к периоду',
@@ -185,11 +214,26 @@ class ExpensesStatisticsSection extends StatelessWidget {
           title: 'Динамика расходов',
           points: snapshot.daily,
           comparison: snapshot.comparisonDaily,
+          currency: _currency,
+          amountConverter: _convert,
+        ),
+        const SizedBox(height: 16),
+        QestoCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const StatisticsSectionHeader(title: 'Структура расходов'),
+              StatisticsDonut(items: snapshot.categories),
+            ],
+          ),
         ),
         const SizedBox(height: 16),
         StatisticsGroupList(
-          title: 'Расходы по категориям',
+          title: 'Категории расходов',
           items: snapshot.categories,
+          limit: snapshot.categories.length,
+          currency: _currency,
+          amountConverter: _convert,
           onTap: (item) => Navigator.of(context).push(
             MaterialPageRoute<void>(
               builder: (_) => StatisticsCategoryScreen(
@@ -198,26 +242,204 @@ class ExpensesStatisticsSection extends StatelessWidget {
               ),
             ),
           ),
-          onShowAll: () =>
-              controller.selectSection(StatisticsSection.categories),
         ),
         const SizedBox(height: 16),
-        _ChangeReasonsCard(controller: controller),
+        StatisticsGroupList(
+          title: 'Магазины и сервисы',
+          items: snapshot.merchants,
+          limit: math.min(5, snapshot.merchants.length),
+          currency: _currency,
+          amountConverter: _convert,
+          onTap: (item) => _openMerchant(context, item.id),
+        ),
+        if (snapshot.merchants.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          _MerchantPatternsCard(
+            controller: controller,
+            currency: _currency,
+            amountConverter: _convert,
+          ),
+        ],
         const SizedBox(height: 16),
-        _LargePurchasesCard(controller: controller),
+        _ChangeReasonsCard(
+          controller: widget.controller,
+          currency: _currency,
+          amountConverter: _convert,
+        ),
         const SizedBox(height: 16),
-        _AmountBucketsCard(snapshot: snapshot),
+        _LargePurchasesCard(
+          controller: controller,
+          currency: _currency,
+          amountConverter: _convert,
+        ),
         const SizedBox(height: 16),
-        _LargestTransactionsCard(controller: controller),
+        _AmountBucketsCard(
+          snapshot: snapshot,
+          currency: _currency,
+          amountConverter: _convert,
+        ),
+        const SizedBox(height: 16),
+        _LargestTransactionsCard(
+          controller: controller,
+          currency: _currency,
+          amountConverter: _convert,
+        ),
       ],
+    );
+  }
+
+  void _openMerchant(BuildContext context, String merchant) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => StatisticsMerchantScreen(
+          controller: widget.controller,
+          merchant: merchant,
+        ),
+      ),
+    );
+  }
+
+  int _convert(int amount) =>
+      CbrCurrencyService.convertRubles(amount, _currency);
+
+  String _money(int amount) => formatMoney(_convert(amount), _currency);
+
+  Future<void> _selectCurrency(String currency) async {
+    if (_currency == currency) return;
+    setState(() => _currency = currency);
+    await widget.controller.budgetController.updateExpenseDisplayCurrency(
+      currency,
+    );
+  }
+}
+
+class _ExpenseCurrencySelector extends StatelessWidget {
+  const _ExpenseCurrencySelector({
+    required this.selected,
+    required this.onSelected,
+  });
+
+  final String selected;
+  final ValueChanged<String> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final rates = CbrCurrencyService.embeddedSnapshot;
+    return QestoCard(
+      child: Row(
+        children: [
+          const Icon(
+            Icons.currency_exchange_rounded,
+            color: QestoColors.primary,
+          ),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Валюта расходов',
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
+                SizedBox(height: 3),
+                Text(
+                  'Курс ЦБ РФ на 22.08.2026: 1 USD = 82,9211 ₽ · 1 EUR = 96,8601 ₽ · 1 CNY = 12,3343 ₽',
+                  style: TextStyle(
+                    color: QestoColors.secondaryText,
+                    fontSize: 11,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Wrap(
+            spacing: 7,
+            children: [
+              for (final code in rates.rates.keys)
+                ChoiceChip(
+                  key: Key('expenses-currency-$code'),
+                  label: Text(code),
+                  selected: selected == code,
+                  onSelected: (_) => onSelected(code),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MerchantPatternsCard extends StatelessWidget {
+  const _MerchantPatternsCard({
+    required this.controller,
+    required this.currency,
+    required this.amountConverter,
+  });
+
+  final StatisticsController controller;
+  final String currency;
+  final int Function(int amount) amountConverter;
+
+  @override
+  Widget build(BuildContext context) {
+    final merchants = controller.snapshot.merchants;
+    final concentration = merchants
+        .take(5)
+        .fold<double>(0, (sum, item) => sum + item.share);
+    return QestoCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const StatisticsSectionHeader(title: 'Покупательские привычки'),
+          const SizedBox(height: 5),
+          const Text(
+            'Частота покупок и средний чек по магазинам и сервисам',
+            style: TextStyle(fontSize: 12, color: QestoColors.secondaryText),
+          ),
+          const SizedBox(height: 12),
+          StatisticsScatter(
+            items: merchants,
+            currency: currency,
+            amountConverter: amountConverter,
+            onTap: (item) => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => StatisticsMerchantScreen(
+                  controller: controller,
+                  merchant: item.id,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          LinearProgressIndicator(
+            value: concentration.clamp(0, 1),
+            minHeight: 10,
+            borderRadius: BorderRadius.circular(8),
+            backgroundColor: QestoColors.border,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'На ${math.min(5, merchants.length)} крупнейших мест приходится ${(concentration * 100).toStringAsFixed(0)}% расходов.',
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
     );
   }
 }
 
 class _ChangeReasonsCard extends StatelessWidget {
-  const _ChangeReasonsCard({required this.controller});
+  const _ChangeReasonsCard({
+    required this.controller,
+    this.currency = 'RUB',
+    this.amountConverter,
+  });
 
   final StatisticsController controller;
+  final String currency;
+  final int Function(int amount)? amountConverter;
 
   @override
   Widget build(BuildContext context) {
@@ -285,8 +507,9 @@ class _ChangeReasonsCard extends StatelessWidget {
                       ),
                       Text(
                         formatMoney(
-                          _difference(category),
-                          'RUB',
+                          amountConverter?.call(_difference(category)) ??
+                              _difference(category),
+                          currency,
                           showSign: true,
                         ),
                         style: TextStyle(
@@ -318,8 +541,14 @@ class _ChangeReasonsCard extends StatelessWidget {
 }
 
 class _LargePurchasesCard extends StatelessWidget {
-  const _LargePurchasesCard({required this.controller});
+  const _LargePurchasesCard({
+    required this.controller,
+    this.currency = 'RUB',
+    this.amountConverter,
+  });
   final StatisticsController controller;
+  final String currency;
+  final int Function(int amount)? amountConverter;
 
   @override
   Widget build(BuildContext context) {
@@ -364,6 +593,8 @@ class _LargePurchasesCard extends StatelessWidget {
             label: 'Обычные',
             amount: ordinary,
             share: ordinary / total,
+            currency: currency,
+            amountConverter: amountConverter,
           ),
           const SizedBox(height: 8),
           _LegendAmount(
@@ -371,6 +602,8 @@ class _LargePurchasesCard extends StatelessWidget {
             label: 'Крупные',
             amount: largeAmount,
             share: largeAmount / total,
+            currency: currency,
+            amountConverter: amountConverter,
           ),
           const SizedBox(height: 12),
           Text(
@@ -389,11 +622,15 @@ class _LegendAmount extends StatelessWidget {
     required this.label,
     required this.amount,
     required this.share,
+    this.currency = 'RUB',
+    this.amountConverter,
   });
   final Color color;
   final String label;
   final int amount;
   final double share;
+  final String currency;
+  final int Function(int amount)? amountConverter;
 
   @override
   Widget build(BuildContext context) => Row(
@@ -406,7 +643,7 @@ class _LegendAmount extends StatelessWidget {
       const SizedBox(width: 8),
       Expanded(child: Text(label)),
       Text(
-        '${formatMoney(amount, 'RUB')} · ${(share * 100).round()}%',
+        '${formatMoney(amountConverter?.call(amount) ?? amount, currency)} · ${(share * 100).round()}%',
         style: const TextStyle(fontWeight: FontWeight.w700),
       ),
     ],
@@ -414,8 +651,14 @@ class _LegendAmount extends StatelessWidget {
 }
 
 class _AmountBucketsCard extends StatelessWidget {
-  const _AmountBucketsCard({required this.snapshot});
+  const _AmountBucketsCard({
+    required this.snapshot,
+    this.currency = 'RUB',
+    this.amountConverter,
+  });
   final StatisticsSnapshot snapshot;
+  final String currency;
+  final int Function(int amount)? amountConverter;
 
   @override
   Widget build(BuildContext context) {
@@ -466,7 +709,7 @@ class _AmountBucketsCard extends StatelessWidget {
           StatisticsInfoBanner(
             message: snapshot.buckets.isEmpty
                 ? 'Недостаточно данных'
-                : '${snapshot.buckets.first.count} покупок дешевле 300 ₽ составили ${formatMoney(snapshot.buckets.first.amount, 'RUB')}',
+                : '${snapshot.buckets.first.count} покупок дешевле ${formatMoney(amountConverter?.call(300) ?? 300, currency)} составили ${formatMoney(amountConverter?.call(snapshot.buckets.first.amount) ?? snapshot.buckets.first.amount, currency)}',
           ),
         ],
       ),
@@ -475,8 +718,14 @@ class _AmountBucketsCard extends StatelessWidget {
 }
 
 class _LargestTransactionsCard extends StatelessWidget {
-  const _LargestTransactionsCard({required this.controller});
+  const _LargestTransactionsCard({
+    required this.controller,
+    this.currency = 'RUB',
+    this.amountConverter,
+  });
   final StatisticsController controller;
+  final String currency;
+  final int Function(int amount)? amountConverter;
 
   @override
   Widget build(BuildContext context) {
@@ -527,7 +776,11 @@ class _LargestTransactionsCard extends StatelessWidget {
               ),
               subtitle: Text(formatDate(transaction.date)),
               trailing: Text(
-                formatMoney(transaction.amount, transaction.currency),
+                formatMoney(
+                  amountConverter?.call(transaction.amount) ??
+                      transaction.amount,
+                  currency,
+                ),
                 style: const TextStyle(fontWeight: FontWeight.w800),
               ),
             ),

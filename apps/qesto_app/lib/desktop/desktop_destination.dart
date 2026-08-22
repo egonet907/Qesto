@@ -41,31 +41,15 @@ enum DesktopDestination {
     Icons.calendar_view_week_rounded,
     DesktopProductSection.budget,
   ),
-  merchants(
-    'Магазины',
-    Icons.storefront_outlined,
-    DesktopProductSection.budget,
-  ),
-  categories(
-    'Категории',
-    Icons.category_outlined,
-    DesktopProductSection.budget,
-  ),
+  merchants('Магазины', Icons.storefront_outlined, null),
+  categories('Категории', Icons.category_outlined, null),
   recurring(
     'Регулярные',
     Icons.event_repeat_outlined,
     DesktopProductSection.budget,
   ),
-  accounts(
-    'Счета',
-    Icons.account_balance_wallet_outlined,
-    null,
-  ),
-  insights(
-    'Наблюдения',
-    Icons.auto_awesome_outlined,
-    DesktopProductSection.budget,
-  ),
+  accounts('Счета', Icons.account_balance_wallet_outlined, null),
+  insights('ИИ', Icons.auto_awesome_outlined, null),
   benefits(
     'Предложения',
     Icons.local_offer_outlined,

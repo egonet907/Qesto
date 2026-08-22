@@ -14,6 +14,8 @@ class StatisticsLineChartCard extends StatefulWidget {
     required this.points,
     this.comparison = const [],
     this.cumulative = true,
+    this.currency = 'RUB',
+    this.amountConverter,
     super.key,
   });
 
@@ -21,6 +23,8 @@ class StatisticsLineChartCard extends StatefulWidget {
   final List<StatisticsDailyPoint> points;
   final List<StatisticsDailyPoint> comparison;
   final bool cumulative;
+  final String currency;
+  final int Function(int amount)? amountConverter;
 
   @override
   State<StatisticsLineChartCard> createState() =>
@@ -70,7 +74,7 @@ class _StatisticsLineChartCardState extends State<StatisticsLineChartCard> {
           const SizedBox(height: 14),
           Semantics(
             label:
-                '${widget.title}. Итог ${formatMoney(endValue, 'RUB')}. Нажмите на график, чтобы выбрать день.',
+                '${widget.title}. Итог ${formatMoney(_amount(endValue), widget.currency)}. Нажмите на график, чтобы выбрать день.',
             child: LayoutBuilder(
               builder: (context, constraints) => GestureDetector(
                 behavior: HitTestBehavior.opaque,
@@ -87,6 +91,8 @@ class _StatisticsLineChartCardState extends State<StatisticsLineChartCard> {
                       comparison: widget.comparison,
                       cumulative: widget.cumulative,
                       selectedIndex: selectedIndex,
+                      currency: widget.currency,
+                      amountConverter: widget.amountConverter,
                     ),
                   ),
                 ),
@@ -109,7 +115,7 @@ class _StatisticsLineChartCardState extends State<StatisticsLineChartCard> {
                       borderRadius: BorderRadius.circular(14),
                     ),
                     child: Text(
-                      '${formatDate(selected.date, includeYear: true)} · ${formatMoney(widget.cumulative ? selected.cumulative : selected.amount, 'RUB')} · ${selected.count} операций',
+                      '${formatDate(selected.date, includeYear: true)} · ${formatMoney(_amount(widget.cumulative ? selected.cumulative : selected.amount), widget.currency)} · ${selected.count} операций',
                       style: const TextStyle(fontWeight: FontWeight.w700),
                     ),
                   ),
@@ -118,6 +124,8 @@ class _StatisticsLineChartCardState extends State<StatisticsLineChartCard> {
       ),
     );
   }
+
+  int _amount(int value) => widget.amountConverter?.call(value) ?? value;
 }
 
 class _LinePainter extends CustomPainter {
@@ -126,12 +134,16 @@ class _LinePainter extends CustomPainter {
     required this.comparison,
     required this.cumulative,
     required this.selectedIndex,
+    required this.currency,
+    required this.amountConverter,
   });
 
   final List<StatisticsDailyPoint> points;
   final List<StatisticsDailyPoint> comparison;
   final bool cumulative;
   final int? selectedIndex;
+  final String currency;
+  final int Function(int amount)? amountConverter;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -205,7 +217,10 @@ class _LinePainter extends CustomPainter {
     }
     final labelPainter = TextPainter(textDirection: TextDirection.ltr);
     labelPainter.text = TextSpan(
-      text: formatCompactMoney(maximum, 'RUB'),
+      text: formatCompactMoney(
+        amountConverter?.call(maximum) ?? maximum,
+        currency,
+      ),
       style: const TextStyle(fontSize: 11, color: QestoColors.secondaryText),
     );
     labelPainter.layout();
@@ -217,7 +232,8 @@ class _LinePainter extends CustomPainter {
       oldDelegate.points != points ||
       oldDelegate.comparison != comparison ||
       oldDelegate.selectedIndex != selectedIndex ||
-      oldDelegate.cumulative != cumulative;
+      oldDelegate.cumulative != cumulative ||
+      oldDelegate.currency != currency;
 }
 
 class StatisticsPeriodBarsCard extends StatefulWidget {
@@ -520,11 +536,15 @@ class StatisticsScatter extends StatelessWidget {
   const StatisticsScatter({
     required this.items,
     required this.onTap,
+    this.currency = 'RUB',
+    this.amountConverter,
     super.key,
   });
 
   final List<StatisticsGroupStat> items;
   final ValueChanged<StatisticsGroupStat> onTap;
+  final String currency;
+  final int Function(int amount)? amountConverter;
 
   @override
   Widget build(BuildContext context) {
@@ -546,10 +566,10 @@ class StatisticsScatter extends StatelessWidget {
               ),
             ),
             label: Text(
-              '${item.label} · ${formatMoney(item.averageCheck.round(), 'RUB')}',
+              '${item.label} · ${formatMoney(amountConverter?.call(item.averageCheck.round()) ?? item.averageCheck.round(), currency)}',
             ),
             tooltip:
-                '${item.count} покупок, средний чек ${formatMoney(item.averageCheck.round(), 'RUB')}',
+                '${item.count} покупок, средний чек ${formatMoney(amountConverter?.call(item.averageCheck.round()) ?? item.averageCheck.round(), currency)}',
           ),
       ],
     );

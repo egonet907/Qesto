@@ -80,6 +80,7 @@ Map<String, dynamic> _userToJson(QestoUser value) => {
   'name': value.name,
   'defaultCurrency': value.defaultCurrency,
   'avatarUrl': value.avatarUrl,
+  'expenseDisplayCurrency': value.expenseDisplayCurrency,
 };
 
 QestoUser _userFromJson(Map<String, dynamic> json) => QestoUser(
@@ -87,6 +88,7 @@ QestoUser _userFromJson(Map<String, dynamic> json) => QestoUser(
   name: json['name'] as String,
   defaultCurrency: json['defaultCurrency'] as String,
   avatarUrl: json['avatarUrl'] as String?,
+  expenseDisplayCurrency: json['expenseDisplayCurrency'] as String? ?? 'RUB',
 );
 
 Map<String, dynamic> _accountToJson(QestoAccount value) => {
@@ -314,6 +316,8 @@ Map<String, dynamic> _savingsGoalToJson(SavingsGoal value) => {
   'currency': value.currency,
   'streakWeeks': value.streakWeeks,
   'isActive': value.isActive,
+  'category': value.category,
+  'targetDate': value.targetDate?.toIso8601String(),
   'history': value.history
       .map(
         (item) => {'date': item.date.toIso8601String(), 'amount': item.amount},
@@ -330,6 +334,10 @@ SavingsGoal _savingsGoalFromJson(Map<String, dynamic> json) => SavingsGoal(
   currency: json['currency'] as String,
   streakWeeks: json['streakWeeks'] as int,
   isActive: json['isActive'] as bool,
+  category: json['category'] as String? ?? 'Другое',
+  targetDate: json['targetDate'] == null
+      ? null
+      : DateTime.tryParse(json['targetDate'] as String),
   history: _list(json['history'])
       .map(
         (item) => SavingsHistoryPoint(

@@ -233,7 +233,11 @@ class SberbankStatementParser {
     _PendingStatementTransaction pending,
   ) {
     final amountMinor = _parseMoneyMinor(pending.amountText);
-    final kind = _kindFor(pending.bankCategory, pending.amountText);
+    final kind = _kindFor(
+      pending.bankCategory,
+      pending.description,
+      pending.amountText,
+    );
     final merchant = _merchantFrom(pending.description, pending.bankCategory);
     final category = _categoryFor(merchant, pending.bankCategory);
     final cardLastFour = _cardPattern.firstMatch(pending.description)?.group(1);
@@ -257,17 +261,47 @@ class SberbankStatementParser {
     );
   }
 
-  StatementTransactionKind _kindFor(String category, String amountText) {
+  StatementTransactionKind _kindFor(
+    String category,
+    String description,
+    String amountText,
+  ) {
     final normalized = category.toLowerCase().replaceAll('ё', 'е');
+    final normalizedDescription = description.toLowerCase().replaceAll(
+      'ё',
+      'е',
+    );
+    final incoming = amountText.trimLeft().startsWith('+');
     if (normalized.contains('возврат') || normalized.contains('отмена')) {
       return StatementTransactionKind.refund;
     }
-    if (normalized.startsWith('перевод') ||
+    final cashMovement =
         normalized.contains('внесение наличных') ||
-        normalized.contains('выдача наличных')) {
+        normalized.contains('выдача наличных');
+    final ownAccountTransfer =
+        normalized.contains('между своими') ||
+        normalizedDescription.contains('между своими') ||
+        normalizedDescription.contains('между собственными') ||
+        normalizedDescription.contains('на свой счет') ||
+        normalizedDescription.contains('на свою карту');
+    if (cashMovement || ownAccountTransfer) {
       return StatementTransactionKind.transfer;
     }
-    if (amountText.trimLeft().startsWith('+')) {
+    if (incoming &&
+        (normalized.contains('зарплат') ||
+            normalized.contains('зачислен') ||
+            RegExp(r'перевод\s+от(\s|$)').hasMatch(normalizedDescription))) {
+      return StatementTransactionKind.income;
+    }
+    if (normalized.startsWith('перевод')) {
+      // A transfer that leaves the only known account must affect Qesto cash
+      // flow. Keep only explicitly identifiable own-account movements neutral;
+      // Synoball still receives the canonical outflow through this adapter.
+      return incoming
+          ? StatementTransactionKind.income
+          : StatementTransactionKind.expense;
+    }
+    if (incoming) {
       return StatementTransactionKind.income;
     }
     return StatementTransactionKind.expense;

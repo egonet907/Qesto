@@ -112,6 +112,7 @@ class _DesktopBudgetAnalysisPageState extends State<DesktopBudgetAnalysisPage> {
       StatisticsSection.expenses => ExpensesStatisticsSection(
         controller: _statistics,
         scrollController: scrollController,
+        showCurrencySelector: true,
       ),
       StatisticsSection.rhythm => RhythmStatisticsSection(
         controller: _statistics,

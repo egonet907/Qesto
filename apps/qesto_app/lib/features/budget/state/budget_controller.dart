@@ -29,6 +29,7 @@ class BudgetController extends ChangeNotifier {
        _categoryCustomizations = List.of(financialData.categoryCustomizations),
        categoryBudgets = List.of(financialData.categoryBudgets),
        plannedCumulativePoints = List.of(financialData.plannedCumulativePoints),
+       savingsGoals = List.of(financialData.savingsGoals),
        _upcomingExpenses = List.of(financialData.upcomingExpenses),
        _actions = List.of(financialData.actions) {
     final storedState = financialData.synoballState;
@@ -46,7 +47,9 @@ class BudgetController extends ChangeNotifier {
           ? _resolvedAccounts(financialData)
           : readModel.accounts,
     );
-    _transactions = List.of(readModel.transactions);
+    _transactions = List.of(
+      _applySberAdapterCompatibility(readModel.transactions),
+    );
     _legacyTransactionIdentities = {
       for (final transaction in financialData.transactions)
         transaction.id: transaction,
@@ -110,6 +113,37 @@ class BudgetController extends ChangeNotifier {
     ];
   }
 
+  static Iterable<BudgetTransaction> _applySberAdapterCompatibility(
+    Iterable<BudgetTransaction> transactions,
+  ) sync* {
+    for (final transaction in transactions) {
+      if (transaction.type != TransactionType.transfer ||
+          transaction.transferDirection != TransferDirection.outgoing ||
+          !transaction.tags.contains('sberbank')) {
+        yield transaction;
+        continue;
+      }
+      final description =
+          (transaction.description ??
+                  transaction.comment ??
+                  transaction.title ??
+                  '')
+              .toLowerCase()
+              .replaceAll('ё', 'е');
+      final ownAccountMovement =
+          description.contains('между своими') ||
+          description.contains('между собственными') ||
+          description.contains('на свой счет') ||
+          description.contains('на свою карту');
+      final cashMovement =
+          description.contains('внесение наличных') ||
+          description.contains('выдача наличных');
+      yield ownAccountMovement || cashMovement
+          ? transaction
+          : transaction.copyWith(type: TransactionType.expense);
+    }
+  }
+
   final DateTime referenceDate;
   final String _userId;
   final String _ledgerCurrency;
@@ -120,6 +154,7 @@ class BudgetController extends ChangeNotifier {
   final List<BudgetCategoryCustomization> _categoryCustomizations;
   final List<CategoryBudget> categoryBudgets;
   final List<BudgetPlanPoint> plannedCumulativePoints;
+  final List<SavingsGoal> savingsGoals;
   late final List<QestoAccount> accounts;
   final BudgetCalculationService calculationService;
   final BudgetForecastService forecastService;
@@ -176,7 +211,7 @@ class BudgetController extends ChangeNotifier {
     upcomingExpenses: List.of(_upcomingExpenses),
     plannedCumulativePoints: List.of(plannedCumulativePoints),
     actions: List.of(_actions),
-    savingsGoals: _clearExternalData ? const [] : source.savingsGoals,
+    savingsGoals: List.of(savingsGoals),
     trackedProducts: _clearExternalData ? const [] : source.trackedProducts,
     synoballState: _synoball.state,
   );
@@ -188,7 +223,7 @@ class BudgetController extends ChangeNotifier {
       ..addAll(readModel.accounts);
     _transactions
       ..clear()
-      ..addAll(readModel.transactions);
+      ..addAll(_applySberAdapterCompatibility(readModel.transactions));
   }
 
   void _addAction(FinancialAction action) {
@@ -895,6 +930,7 @@ class BudgetController extends ChangeNotifier {
       ..clear()
       ..addAll(_baseCategories);
     plannedCumulativePoints.clear();
+    savingsGoals.clear();
     _upcomingExpenses.clear();
     _actions.clear();
     _legacyTransactionIdentities.clear();
@@ -924,6 +960,63 @@ class BudgetController extends ChangeNotifier {
       ),
     );
     await _changed();
+  }
+
+  Future<void> updateExpenseDisplayCurrency(String currency) async {
+    final cleaned = currency.trim().toUpperCase();
+    if (!const {'RUB', 'USD', 'EUR', 'CNY'}.contains(cleaned)) return;
+    if (user.expenseDisplayCurrency == cleaned) return;
+    user = user.copyWith(expenseDisplayCurrency: cleaned);
+    await _changed();
+  }
+
+  Future<SavingsGoal?> addSavingsGoal({
+    required String title,
+    required String category,
+    required int targetAmount,
+    required DateTime targetDate,
+    int savedAmount = 0,
+    String? currency,
+  }) async {
+    final cleanedTitle = title.trim();
+    if (cleanedTitle.isEmpty || targetAmount <= 0) return null;
+    final goal = SavingsGoal(
+      id: 'goal-${DateTime.now().microsecondsSinceEpoch}',
+      userId: _userId,
+      title: cleanedTitle,
+      targetAmount: targetAmount,
+      savedAmount: savedAmount.clamp(0, targetAmount).toInt(),
+      currency: currency ?? user.defaultCurrency,
+      streakWeeks: 0,
+      isActive: savingsGoals.every((item) => !item.isActive),
+      history: savedAmount <= 0
+          ? const []
+          : [SavingsHistoryPoint(date: referenceDate, amount: savedAmount)],
+      category: category.trim().isEmpty ? 'Другое' : category.trim(),
+      targetDate: targetDate,
+    );
+    savingsGoals.add(goal);
+    _clearExternalData = false;
+    await _changed();
+    return goal;
+  }
+
+  Future<void> updateSavingsGoal(SavingsGoal goal) async {
+    final index = savingsGoals.indexWhere((item) => item.id == goal.id);
+    if (index < 0 || goal.title.trim().isEmpty || goal.targetAmount <= 0) {
+      return;
+    }
+    savingsGoals[index] = goal.copyWith(
+      title: goal.title.trim(),
+      savedAmount: goal.savedAmount.clamp(0, goal.targetAmount).toInt(),
+    );
+    await _changed();
+  }
+
+  Future<void> deleteSavingsGoal(String id) async {
+    final before = savingsGoals.length;
+    savingsGoals.removeWhere((item) => item.id == id);
+    if (savingsGoals.length != before) await _changed();
   }
 
   Future<void> addUpcoming(UpcomingExpense expense) async {

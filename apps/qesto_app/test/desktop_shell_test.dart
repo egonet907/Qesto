@@ -248,6 +248,11 @@ void main() {
       find.byKey(const Key('desktop-destination-dashboard')),
       findsOneWidget,
     );
+    expect(
+      find.byKey(const Key('desktop-destination-insights')),
+      findsOneWidget,
+    );
+    expect(find.text('ИИ'), findsOneWidget);
     expect(find.byKey(const Key('desktop-destination-reports')), findsNothing);
 
     await tester.tap(find.byKey(const Key('desktop-section-budget')));
@@ -256,16 +261,13 @@ void main() {
     expect(find.byKey(const Key('desktop-destination-rhythm')), findsOneWidget);
     expect(
       find.byKey(const Key('desktop-destination-merchants')),
-      findsOneWidget,
+      findsNothing,
     );
     expect(
       find.byKey(const Key('desktop-destination-categories')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const Key('desktop-destination-accounts')),
       findsNothing,
     );
+    expect(find.byKey(const Key('desktop-destination-accounts')), findsNothing);
 
     await tester.tap(find.byKey(const Key('desktop-destination-dashboard')));
     await tester.pumpAndSettle();
@@ -387,6 +389,28 @@ void main() {
     expect(find.text('Динамика расходов'), findsOneWidget);
     expect(find.text('Статистика'), findsNothing);
 
+    await tester.drag(
+      find.byKey(const PageStorageKey('statistics-expenses')),
+      const Offset(0, -520),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Структура расходов'), findsOneWidget);
+    expect(find.text('Категории расходов'), findsOneWidget);
+
+    await tester.drag(
+      find.byKey(const PageStorageKey('statistics-expenses')),
+      const Offset(0, -620),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Магазины и сервисы'), findsOneWidget);
+    expect(find.text('Покупательские привычки'), findsOneWidget);
+
+    await tester.drag(
+      find.byKey(const PageStorageKey('statistics-expenses')),
+      const Offset(0, 900),
+    );
+    await tester.pumpAndSettle();
+
     await tester.tap(find.byIcon(Icons.calendar_view_week_rounded).first);
     await tester.pumpAndSettle();
     expect(find.text('Ритм жизни · аналитика'), findsOneWidget);
@@ -397,11 +421,6 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('Дни недели'), findsOneWidget);
-
-    await tester.tap(find.byIcon(Icons.category_outlined).first);
-    await tester.pumpAndSettle();
-    expect(find.text('Категории · аналитика'), findsOneWidget);
-    expect(find.text('Структура расходов'), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('desktop-statistics-filters')));
     await tester.pumpAndSettle();
@@ -503,8 +522,6 @@ void main() {
     for (final icon in [
       Icons.trending_down_rounded,
       Icons.calendar_view_week_rounded,
-      Icons.storefront_outlined,
-      Icons.category_outlined,
     ]) {
       final destination = find.byIcon(icon).first;
       await tester.tap(destination);
@@ -515,5 +532,71 @@ void main() {
         reason: 'overflow in direct budget analytics section $icon',
       );
     }
+  });
+
+  testWidgets('expenses can be displayed in the fixed CBR currencies', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1440, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      QestoApp(
+        repository: MockQestoRepository(
+          delay: Duration.zero,
+          financialData: sampleUserFinancialData,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('desktop-section-budget')));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('22.08.2026'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('expenses-currency-USD')));
+    await tester.pumpAndSettle();
+    final chip = tester.widget<ChoiceChip>(
+      find.byKey(const Key('expenses-currency-USD')),
+    );
+    expect(chip.selected, isTrue);
+    expect(find.textContaining(r'$'), findsWidgets);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('desktop goals can be created with category and deadline', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1440, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      QestoApp(
+        repository: MockQestoRepository(
+          delay: Duration.zero,
+          financialData: sampleUserFinancialData,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('desktop-section-savings')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('goal-add-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('goal-editor-dialog')), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const Key('goal-title-field')),
+      'Поездка в Китай',
+    );
+    await tester.enterText(
+      find.byKey(const Key('goal-target-field')),
+      '200000',
+    );
+    await tester.tap(find.byKey(const Key('goal-save-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Поездка в Китай'), findsOneWidget);
+    expect(find.text('Финансовая подушка'), findsWidgets);
+    expect(tester.takeException(), isNull);
   });
 }

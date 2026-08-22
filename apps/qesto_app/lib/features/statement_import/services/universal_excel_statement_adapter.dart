@@ -1648,10 +1648,15 @@ _Direction _resolveDirection({
   if (headerRole == _ColumnRole.expenseAmount) return _Direction.expense;
   if (headerRole == _ColumnRole.incomeAmount) return _Direction.income;
   final context = _normalizeText('$sheetName ${typeText ?? ''} $description');
+  if (RegExp(
+    r'зарплат|оклад|преми|перевод\s+от(\s|$)|получен.*перевод|входящ.*перевод',
+  ).hasMatch(context)) {
+    return _Direction.income;
+  }
   if (RegExp(r'расход|трат|покуп|списан|плат[её]ж').hasMatch(context)) {
     return _Direction.expense;
   }
-  if (RegExp(r'доход|приход|зачислен|зарплат|пополнен').hasMatch(context)) {
+  if (RegExp(r'доход|приход|зачислен|пополнен').hasMatch(context)) {
     return _Direction.income;
   }
   return rawAmount < 0 ? _Direction.signed : _Direction.expense;
@@ -1671,6 +1676,12 @@ _ResolvedKind _kindFor(
     _Direction.expense => rawAmount < 0,
     _Direction.signed => rawAmount >= 0,
   };
+  if (incoming &&
+      RegExp(
+        r'зарплат|оклад|преми|перевод\s+(от|от\s+лица|от\s+физ)|получен.*перевод|входящ.*перевод',
+      ).hasMatch(normalized)) {
+    return const _ResolvedKind(StatementTransactionKind.income, true);
+  }
   if (normalized.contains('перевод') && direction == _Direction.signed) {
     return _ResolvedKind(StatementTransactionKind.transfer, incoming);
   }

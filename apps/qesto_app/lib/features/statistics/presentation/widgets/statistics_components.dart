@@ -265,6 +265,8 @@ class StatisticsGroupList extends StatelessWidget {
     required this.onTap,
     this.limit = 3,
     this.onShowAll,
+    this.currency = 'RUB',
+    this.amountConverter,
     super.key,
   });
 
@@ -273,6 +275,8 @@ class StatisticsGroupList extends StatelessWidget {
   final ValueChanged<StatisticsGroupStat> onTap;
   final int limit;
   final VoidCallback? onShowAll;
+  final String currency;
+  final int Function(int amount)? amountConverter;
 
   @override
   Widget build(BuildContext context) {
@@ -291,6 +295,8 @@ class StatisticsGroupList extends StatelessWidget {
               item: visible[index],
               onTap: () => onTap(visible[index]),
               maxAmount: items.isEmpty ? 1 : items.first.amount,
+              currency: currency,
+              amountConverter: amountConverter,
             ),
         ],
       ),
@@ -303,11 +309,15 @@ class _GroupRow extends StatelessWidget {
     required this.item,
     required this.onTap,
     required this.maxAmount,
+    required this.currency,
+    required this.amountConverter,
   });
 
   final StatisticsGroupStat item;
   final VoidCallback onTap;
   final int maxAmount;
+  final String currency;
+  final int Function(int amount)? amountConverter;
 
   @override
   Widget build(BuildContext context) {
@@ -364,7 +374,10 @@ class _GroupRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Text(
-                  formatMoney(item.amount, 'RUB'),
+                  formatMoney(
+                    amountConverter?.call(item.amount) ?? item.amount,
+                    currency,
+                  ),
                   style: const TextStyle(fontWeight: FontWeight.w800),
                 ),
                 const SizedBox(height: 4),

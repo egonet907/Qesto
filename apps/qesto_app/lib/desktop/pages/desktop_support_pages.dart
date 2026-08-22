@@ -11,84 +11,418 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/desktop_components.dart';
 
 class DesktopGoalsPage extends StatelessWidget {
-  const DesktopGoalsPage({required this.goals, super.key});
-  final List<SavingsGoal> goals;
+  const DesktopGoalsPage({required this.controller, super.key});
+  final BudgetController controller;
+
+  static const categories = <String>[
+    'Финансовая подушка',
+    'Путешествие',
+    'Крупная покупка',
+    'Жильё',
+    'Образование',
+    'Другое',
+  ];
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: controller,
+    builder: (context, _) => _buildContent(context),
+  );
+
+  Widget _buildContent(BuildContext context) {
+    final goals = controller.savingsGoals;
     if (goals.isEmpty) {
-      return const DesktopEmptyState(
-        title: 'Целей пока нет',
-        message: 'Добавьте финансовую цель и отслеживайте прогресс.',
-        icon: Icons.flag_outlined,
+      return ListView(
+        padding: const EdgeInsets.fromLTRB(26, 20, 26, 30),
+        children: [
+          _GoalsHeader(onAdd: () => _openEditor(context)),
+          const SizedBox(height: 16),
+          DesktopEmptyState(
+            title: 'Целей пока нет',
+            message: 'Создайте цель, укажите сумму и дату завершения.',
+            icon: Icons.flag_outlined,
+            action: FilledButton.icon(
+              onPressed: () => _openEditor(context),
+              icon: const Icon(Icons.add_rounded),
+              label: const Text('Создать цель'),
+            ),
+          ),
+        ],
       );
     }
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(26, 20, 26, 30),
-      child: Wrap(
-        spacing: 14,
-        runSpacing: 14,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          for (final goal in goals)
-            SizedBox(
-              width: 350,
-              height: 230,
-              child: DesktopCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(
-                          Icons.flag_outlined,
-                          color: QestoColors.primary,
-                        ),
-                        const SizedBox(width: 9),
-                        Expanded(
-                          child: Text(
-                            goal.title,
-                            style: const TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 20),
-                    Text(
-                      '${formatMoney(goal.savedAmount, goal.currency)} из ${formatMoney(goal.targetAmount, goal.currency)}',
-                      style: const TextStyle(
-                        fontSize: 19,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    DesktopProgressBar(value: goal.progress, height: 8),
-                    const SizedBox(height: 8),
-                    Text(
-                      '${(goal.progress * 100).round()}% · серия ${goal.streakWeeks} недель',
-                      style: const TextStyle(
-                        color: QestoColors.secondaryText,
-                        fontSize: 11,
-                      ),
-                    ),
-                    const Spacer(),
-                    Text(
-                      'Прогноз зависит от будущего темпа накоплений',
-                      style: TextStyle(
-                        color: QestoColors.secondaryText.withValues(alpha: 0.9),
-                        fontSize: 9,
-                      ),
-                    ),
-                  ],
+          _GoalsHeader(onAdd: () => _openEditor(context)),
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 14,
+            runSpacing: 14,
+            children: [
+              for (final goal in goals)
+                SizedBox(
+                  width: 350,
+                  height: 252,
+                  child: _GoalCard(
+                    goal: goal,
+                    onEdit: () => _openEditor(context, goal: goal),
+                    onDelete: () => _delete(context, goal),
+                  ),
                 ),
-              ),
-            ),
+            ],
+          ),
         ],
       ),
     );
   }
+
+  Future<void> _openEditor(BuildContext context, {SavingsGoal? goal}) async {
+    final title = TextEditingController(text: goal?.title ?? '');
+    final target = TextEditingController(
+      text: goal == null ? '' : goal.targetAmount.toString(),
+    );
+    final saved = TextEditingController(
+      text: goal == null ? '0' : goal.savedAmount.toString(),
+    );
+    var category = goal?.category ?? categories.first;
+    var targetDate =
+        goal?.targetDate ?? DateTime.now().add(const Duration(days: 180));
+    var currency = goal?.currency ?? controller.user.defaultCurrency;
+    if (!const {'RUB', 'USD', 'EUR', 'CNY'}.contains(currency)) {
+      currency = 'RUB';
+    }
+    String? error;
+    final shouldSave = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          key: const Key('goal-editor-dialog'),
+          title: Text(goal == null ? 'Новая цель' : 'Редактировать цель'),
+          content: SizedBox(
+            width: 480,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    key: const Key('goal-title-field'),
+                    controller: title,
+                    decoration: const InputDecoration(
+                      labelText: 'Название цели',
+                      prefixIcon: Icon(Icons.flag_outlined),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    key: const Key('goal-category-field'),
+                    initialValue: category,
+                    decoration: const InputDecoration(
+                      labelText: 'Категория',
+                      prefixIcon: Icon(Icons.category_outlined),
+                    ),
+                    items: [
+                      for (final item in categories)
+                        DropdownMenuItem(value: item, child: Text(item)),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) {
+                        setDialogState(() => category = value);
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          key: const Key('goal-target-field'),
+                          controller: target,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(labelText: 'Цель'),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: TextField(
+                          key: const Key('goal-saved-field'),
+                          controller: saved,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            labelText: 'Накоплено',
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      SizedBox(
+                        width: 110,
+                        child: DropdownButtonFormField<String>(
+                          key: const Key('goal-currency-field'),
+                          initialValue: currency,
+                          decoration: const InputDecoration(
+                            labelText: 'Валюта',
+                          ),
+                          items: const [
+                            DropdownMenuItem(value: 'RUB', child: Text('RUB')),
+                            DropdownMenuItem(value: 'USD', child: Text('USD')),
+                            DropdownMenuItem(value: 'EUR', child: Text('EUR')),
+                            DropdownMenuItem(value: 'CNY', child: Text('CNY')),
+                          ],
+                          onChanged: (value) {
+                            if (value != null) {
+                              setDialogState(() => currency = value);
+                            }
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  InkWell(
+                    key: const Key('goal-date-field'),
+                    onTap: () async {
+                      final value = await showDatePicker(
+                        context: context,
+                        initialDate: targetDate,
+                        firstDate: DateTime.now(),
+                        lastDate: DateTime.now().add(
+                          const Duration(days: 3650),
+                        ),
+                      );
+                      if (value != null) {
+                        setDialogState(() => targetDate = value);
+                      }
+                    },
+                    borderRadius: BorderRadius.circular(12),
+                    child: InputDecorator(
+                      decoration: const InputDecoration(
+                        labelText: 'Срок цели',
+                        prefixIcon: Icon(Icons.event_outlined),
+                      ),
+                      child: Text(formatDate(targetDate, includeYear: true)),
+                    ),
+                  ),
+                  if (error != null) ...[
+                    const SizedBox(height: 10),
+                    Text(
+                      error!,
+                      style: const TextStyle(color: QestoColors.danger),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Отмена'),
+            ),
+            FilledButton(
+              key: const Key('goal-save-button'),
+              onPressed: () {
+                final targetAmount = _amount(target.text);
+                final savedAmount = _amount(saved.text);
+                if (title.text.trim().isEmpty || targetAmount <= 0) {
+                  setDialogState(
+                    () => error = 'Укажите название и сумму больше нуля',
+                  );
+                } else if (savedAmount > targetAmount) {
+                  setDialogState(
+                    () => error = 'Накоплено не может быть больше цели',
+                  );
+                } else {
+                  Navigator.pop(dialogContext, true);
+                }
+              },
+              child: const Text('Сохранить'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (shouldSave == true) {
+      if (goal == null) {
+        await controller.addSavingsGoal(
+          title: title.text,
+          category: category,
+          targetAmount: _amount(target.text),
+          savedAmount: _amount(saved.text),
+          targetDate: targetDate,
+          currency: currency,
+        );
+      } else {
+        await controller.updateSavingsGoal(
+          goal.copyWith(
+            title: title.text,
+            category: category,
+            targetAmount: _amount(target.text),
+            savedAmount: _amount(saved.text),
+            targetDate: targetDate,
+            currency: currency,
+          ),
+        );
+      }
+    }
+    // The dialog route may still be animating after its Future completes.
+    // Keep field controllers alive until its widgets have left the tree.
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    title.dispose();
+    target.dispose();
+    saved.dispose();
+  }
+
+  Future<void> _delete(BuildContext context, SavingsGoal goal) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Удалить цель?'),
+        content: Text('«${goal.title}» будет удалена.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Отмена'),
+          ),
+          FilledButton(
+            key: const Key('goal-delete-confirm'),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Удалить'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) await controller.deleteSavingsGoal(goal.id);
+  }
+
+  int _amount(String value) =>
+      int.tryParse(value.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+}
+
+class _GoalsHeader extends StatelessWidget {
+  const _GoalsHeader({required this.onAdd});
+  final VoidCallback onAdd;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      const Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Финансовые цели',
+              style: TextStyle(fontSize: 21, fontWeight: FontWeight.w900),
+            ),
+            SizedBox(height: 4),
+            Text(
+              'Планируйте сумму и срок накопления',
+              style: TextStyle(color: QestoColors.secondaryText),
+            ),
+          ],
+        ),
+      ),
+      FilledButton.icon(
+        key: const Key('goal-add-button'),
+        onPressed: onAdd,
+        icon: const Icon(Icons.add_rounded),
+        label: const Text('Новая цель'),
+      ),
+    ],
+  );
+}
+
+class _GoalCard extends StatelessWidget {
+  const _GoalCard({
+    required this.goal,
+    required this.onEdit,
+    required this.onDelete,
+  });
+  final SavingsGoal goal;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) => DesktopCard(
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.flag_outlined, color: QestoColors.primary),
+            const SizedBox(width: 9),
+            Expanded(
+              child: Text(
+                goal.title,
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+            IconButton(
+              key: Key('goal-edit-${goal.id}'),
+              tooltip: 'Редактировать',
+              onPressed: onEdit,
+              icon: const Icon(Icons.edit_outlined, size: 18),
+            ),
+            IconButton(
+              key: Key('goal-delete-${goal.id}'),
+              tooltip: 'Удалить',
+              onPressed: onDelete,
+              icon: const Icon(Icons.delete_outline_rounded, size: 18),
+            ),
+          ],
+        ),
+        Text(
+          goal.category,
+          style: const TextStyle(
+            color: QestoColors.primary,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 14),
+        Text(
+          '${formatMoney(goal.savedAmount, goal.currency)} из ${formatMoney(goal.targetAmount, goal.currency)}',
+          style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w900),
+        ),
+        const SizedBox(height: 12),
+        DesktopProgressBar(
+          value: goal.progress.clamp(0, 1).toDouble(),
+          height: 8,
+        ),
+        const SizedBox(height: 8),
+        Text(
+          '${(goal.progress * 100).clamp(0, 100).round()}% накоплено',
+          style: const TextStyle(
+            color: QestoColors.secondaryText,
+            fontSize: 11,
+          ),
+        ),
+        const Spacer(),
+        Row(
+          children: [
+            const Icon(
+              Icons.event_outlined,
+              size: 15,
+              color: QestoColors.secondaryText,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              goal.targetDate == null
+                  ? 'Срок не задан'
+                  : 'До ${formatDate(goal.targetDate!, includeYear: true)}',
+              style: const TextStyle(
+                color: QestoColors.secondaryText,
+                fontSize: 11,
+              ),
+            ),
+          ],
+        ),
+      ],
+    ),
+  );
 }
 
 class DesktopInsightsPage extends StatelessWidget {
@@ -154,7 +488,7 @@ class DesktopInsightsPage extends StatelessWidget {
           color: QestoColors.warning,
           title: 'Изменение расходов',
           message:
-              'Qesto сравнивает категории и merchants только по canonical операциям, исключая неподтверждённые дубли.',
+              'Qesto сравнивает категории и магазины только по каноническим операциям, исключая неподтверждённые дубли.',
         ),
         const SizedBox(height: 12),
         _InsightFeedCard(

@@ -142,6 +142,12 @@ class _DesktopSidebarState extends State<DesktopSidebar> {
                     onTap: () =>
                         widget.onSelected(DesktopDestination.dashboard),
                   ),
+                  _SidebarItem(
+                    destination: DesktopDestination.insights,
+                    selected: widget.selected == DesktopDestination.insights,
+                    collapsed: widget.collapsed,
+                    onTap: () => widget.onSelected(DesktopDestination.insights),
+                  ),
                   const SizedBox(height: 5),
                   if (!widget.collapsed)
                     const Padding(

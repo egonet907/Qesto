@@ -191,9 +191,7 @@ class _DesktopAppShellState extends State<DesktopAppShell> {
     DesktopDestination.recurring => DesktopRecurringPage(
       controller: widget.controller,
     ),
-    DesktopDestination.goals => DesktopGoalsPage(
-      goals: widget.data.financialData.savingsGoals,
-    ),
+    DesktopDestination.goals => DesktopGoalsPage(controller: widget.controller),
     DesktopDestination.capital => DesktopAccountsPage(
       controller: widget.controller,
     ),
