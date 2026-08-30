@@ -19,13 +19,7 @@ void main() {
     final overview = DesktopOverviewData.build(controller, period);
     final flow = overview.flow!;
 
-    expect(
-      overview.income,
-      controller
-          .transactionsFor(period)
-          .where((item) => item.type == TransactionType.income)
-          .fold<int>(0, (sum, item) => sum + item.amount),
-    );
+    expect(overview.income, controller.cashFlowFor(period).externalInflows);
     expect(
       overview.periodTransactions.where(
         (item) => item.type == TransactionType.transfer,

@@ -5,8 +5,39 @@ import 'package:flutter/foundation.dart';
 import '../../../data/models/qesto_models.dart';
 import '../services/budget_calculation_service.dart';
 import '../services/budget_forecast_service.dart';
+import '../services/cash_flow_calculation_service.dart';
 import '../services/category_budget_calculation_service.dart';
 import '../../../synoball/synoball.dart';
+import '../../bank_browser/sber/sber_connector_models.dart';
+
+String _sberCategory(SberTransactionFact value) {
+  final text = '${value.category ?? ''} ${value.description}'.toLowerCase();
+  if (RegExp(
+    r'продукт|супермаркет|пятероч|перекрест|лента|магнит',
+  ).hasMatch(text)) {
+    return 'groceries';
+  }
+  if (RegExp(
+    r'такси|метро|автобус|транспорт|бензин|азс|каршер|самокат|скутер|scooter|whoosh',
+  ).hasMatch(text)) {
+    return 'transport';
+  }
+  if (RegExp(r'ресторан|кафе|кофейн|бар|фастфуд').hasMatch(text)) {
+    return 'cafes';
+  }
+  if (RegExp(r'зарплат|доход|зачислен|перевод от').hasMatch(text)) {
+    return 'business';
+  }
+  if (RegExp(r'вклад|депозит|накоплен').hasMatch(text)) return 'other';
+  if (RegExp(r'квартир|аренд|жиль|коммунал').hasMatch(text)) return 'housing';
+  if (RegExp(r'подписк|spotify|netflix|музык').hasMatch(text)) {
+    return 'subscriptions';
+  }
+  return 'other';
+}
+
+bool _sameStringSet(List<String> left, List<String> right) =>
+    left.length == right.length && left.toSet().containsAll(right);
 
 class BudgetController extends ChangeNotifier {
   BudgetController({
@@ -16,6 +47,7 @@ class BudgetController extends ChangeNotifier {
     this.calculationService = const BudgetCalculationService(),
     this.forecastService = const BudgetForecastService(),
     this.categoryCalculationService = const CategoryBudgetCalculationService(),
+    this.cashFlowCalculationService = const CashFlowCalculationService(),
   }) : referenceDate = financialData.referenceDate,
        _userId = financialData.user.id,
        _ledgerCurrency = financialData.user.defaultCurrency,
@@ -117,9 +149,18 @@ class BudgetController extends ChangeNotifier {
     Iterable<BudgetTransaction> transactions,
   ) sync* {
     for (final transaction in transactions) {
+      if (!transaction.tags.contains('sberbank')) {
+        yield transaction;
+        continue;
+      }
+      if (transaction.tags.contains('sber-status-refund') &&
+          transaction.type != TransactionType.refund) {
+        yield transaction.copyWith(type: TransactionType.refund);
+        continue;
+      }
       if (transaction.type != TransactionType.transfer ||
           transaction.transferDirection != TransferDirection.outgoing ||
-          !transaction.tags.contains('sberbank')) {
+          transaction.tags.contains(qestoInternalTransferTag)) {
         yield transaction;
         continue;
       }
@@ -138,9 +179,16 @@ class BudgetController extends ChangeNotifier {
       final cashMovement =
           description.contains('внесение наличных') ||
           description.contains('выдача наличных');
-      yield ownAccountMovement || cashMovement
-          ? transaction
-          : transaction.copyWith(type: TransactionType.expense);
+      if (ownAccountMovement || cashMovement) {
+        yield transaction.copyWith(
+          tags: {...transaction.tags, qestoInternalTransferTag}.toList(),
+        );
+      } else {
+        yield transaction.copyWith(
+          type: TransactionType.expense,
+          tags: {...transaction.tags, qestoExternalTransferTag}.toList(),
+        );
+      }
     }
   }
 
@@ -159,6 +207,7 @@ class BudgetController extends ChangeNotifier {
   final BudgetCalculationService calculationService;
   final BudgetForecastService forecastService;
   final CategoryBudgetCalculationService categoryCalculationService;
+  final CashFlowCalculationService cashFlowCalculationService;
   final Future<void> Function()? onChanged;
 
   late final List<BudgetTransaction> _transactions;
@@ -180,6 +229,26 @@ class BudgetController extends ChangeNotifier {
   SynoballState get synoballState => _synoball.state;
   List<TransactionCandidate> get pendingCandidates =>
       _synoball.pendingCandidates;
+
+  QestoCashFlowSummary cashFlowForRange({
+    required DateTime from,
+    required DateTime toExclusive,
+    String? currency,
+  }) => cashFlowCalculationService.calculate(
+    transactions: _transactions,
+    from: from,
+    toExclusive: toExclusive,
+    currency: currency,
+  );
+
+  QestoCashFlowSummary cashFlowFor(BudgetPeriod period) => cashFlowForRange(
+    from: period.startDate,
+    toExclusive: period.endDate.add(const Duration(days: 1)),
+    currency: period.currency,
+  );
+
+  CashFlowTreatment cashFlowTreatment(BudgetTransaction transaction) =>
+      cashFlowCalculationService.treatment(transaction);
 
   FinancialState get financialState => _financialStateService.calculate(
     state: _synoball.state,
@@ -514,6 +583,216 @@ class BudgetController extends ChangeNotifier {
     return outcome.createdTransactionIds.length;
   }
 
+  /// Imports facts produced by the local read-only Sber connector through the
+  /// same Synoball StatementAdapter as file imports. The connector never
+  /// writes raw HTML or banking credentials into this payload.
+  Future<SberImportSummary> importSberSnapshot(
+    SberSyncSnapshot snapshot,
+  ) async {
+    final importedAccounts = snapshot.accounts
+        .map((value) {
+          final linkedCards = value.linkedCardLastFours
+              .map((suffix) => '•• $suffix')
+              .join(', ');
+          return QestoAccount(
+            id: value.id,
+            userId: _userId,
+            title: linkedCards.isEmpty
+                ? value.name
+                : '${value.name} · карта $linkedCards',
+            balance: value.balance,
+            currency: value.currency,
+            type: value.type,
+          );
+        })
+        .toList(growable: false);
+    final accountIds = importedAccounts.map((item) => item.id).toSet();
+    // A parser mismatch in the products screen must not discard operations
+    // that were successfully read from the history screen. Keep the existing
+    // account as a safe target until the next complete product refresh.
+    final fallbackAccountId = importedAccounts.isNotEmpty
+        ? importedAccounts.first.id
+        : (accounts.isNotEmpty ? accounts.first.id : 'local-default-account');
+    final existingById = {for (final item in _transactions) item.id: item};
+    final importedTransactions = snapshot.transactions
+        .map((value) {
+          final id = 'sber-${value.fingerprint}';
+          final existing = existingById[id];
+          final manualCategory =
+              existing?.tags.contains(qestoManualCategoryTag) == true;
+          final automaticCategory = value.isIncome
+              ? 'business'
+              : _sberCategory(value);
+          final type = value.status == 'REFUND'
+              ? TransactionType.refund
+              : value.isIncome
+              ? TransactionType.income
+              : value.isInternalTransfer
+              ? TransactionType.transfer
+              : TransactionType.expense;
+          final tags = <String>{
+            'sberbank',
+            'sber-live',
+            'sber-status-${value.status.toLowerCase()}',
+            if (value.isTransfer && value.isInternalTransfer)
+              qestoInternalTransferTag,
+            if (value.isTransfer && !value.isInternalTransfer)
+              qestoExternalTransferTag,
+            if (value.loyaltyReward != null) qestoLoyaltyMetadataTag,
+            if (manualCategory)
+              qestoManualCategoryTag
+            else
+              qestoAutoCategoryTag,
+          };
+          return BudgetTransaction(
+            id: id,
+            userId: _userId,
+            accountId: accountIds.contains(value.accountId)
+                ? value.accountId
+                : fallbackAccountId,
+            date: value.date,
+            amount: value.amount,
+            currency: value.currency,
+            type: type,
+            categoryId: manualCategory
+                ? existing!.categoryId
+                : automaticCategory,
+            merchant: value.merchant,
+            title: value.merchant ?? value.description,
+            description: value.description,
+            comment: 'СберБанк Онлайн · ${value.status}',
+            normalizedMerchant: value.merchant?.toLowerCase(),
+            isConfirmed: value.status == 'POSTED' || value.status == 'REFUND',
+            isPotentialDuplicate: false,
+            classificationConfidence: value.category == null ? 0.72 : 0.9,
+            originalCategoryId: value.category,
+            transferDirection: value.isTransfer
+                ? value.isIncome
+                      ? TransferDirection.incoming
+                      : TransferDirection.outgoing
+                : null,
+            tags: tags.toList(growable: false),
+          );
+        })
+        .toList(growable: false);
+    final accountsUpdated = importedAccounts.where((incoming) {
+      final index = accounts.indexWhere((item) => item.id == incoming.id);
+      // A first observation is also a balance update from the user's point
+      // of view: the account did not exist in Qesto before this sync.
+      return index < 0 || !_sameAccount(accounts[index], incoming);
+    }).length;
+    final accountItems = importedAccounts
+        .map((incoming) {
+          final index = accounts.indexWhere((item) => item.id == incoming.id);
+          final change = index < 0
+              ? SberImportChange.created
+              : !_sameAccount(accounts[index], incoming)
+              ? SberImportChange.updated
+              : SberImportChange.unchanged;
+          return SberAccountImportItem(
+            title: incoming.title,
+            balance: incoming.balance,
+            currency: incoming.currency,
+            change: change,
+          );
+        })
+        .toList(growable: false);
+    if (importedTransactions.isEmpty && importedAccounts.isEmpty) {
+      return const SberImportSummary(
+        found: 0,
+        newCount: 0,
+        updatedCount: 0,
+        unchangedCount: 0,
+        accountsFound: 0,
+        accountsUpdated: 0,
+      );
+    }
+    bool transactionChanged(
+      BudgetTransaction existing,
+      BudgetTransaction incoming,
+    ) {
+      return existing.amount != incoming.amount ||
+          existing.currency != incoming.currency ||
+          existing.date != incoming.date ||
+          existing.type != incoming.type ||
+          existing.categoryId != incoming.categoryId ||
+          existing.title != incoming.title ||
+          existing.merchant != incoming.merchant ||
+          existing.description != incoming.description ||
+          existing.transferDirection != incoming.transferDirection ||
+          !_sameStringSet(existing.tags, incoming.tags) ||
+          existing.isConfirmed != incoming.isConfirmed;
+    }
+
+    final recategorizedCount = importedTransactions.where((incoming) {
+      final existing = existingById[incoming.id];
+      return existing != null &&
+          !existing.tags.contains(qestoManualCategoryTag) &&
+          existing.categoryId != incoming.categoryId;
+    }).length;
+
+    final updatedBeforeImport = importedTransactions.where((incoming) {
+      final existing = existingById[incoming.id];
+      if (existing == null) return false;
+      return transactionChanged(existing, incoming);
+    }).length;
+    final transactionItems = importedTransactions
+        .map((incoming) {
+          final existing = existingById[incoming.id];
+          final change = existing == null
+              ? SberImportChange.created
+              : transactionChanged(existing, incoming)
+              ? SberImportChange.updated
+              : SberImportChange.unchanged;
+          return SberTransactionImportItem(
+            title: incoming.title ?? incoming.description ?? 'Операция Сбера',
+            date: incoming.date,
+            amount: incoming.amount,
+            currency: incoming.currency,
+            isIncome:
+                incoming.type == TransactionType.income ||
+                incoming.type == TransactionType.refund,
+            isTransfer: incoming.type == TransactionType.transfer,
+            change: change,
+          );
+        })
+        .toList(growable: false);
+    final periods = <String>{};
+    for (final transaction in importedTransactions) {
+      periods.add(periodForOrCreate(transaction.date).id);
+    }
+    final primaryAccount = importedAccounts.isNotEmpty
+        ? importedAccounts.first
+        : accounts.first;
+    final created = await importStatement(
+      account: primaryAccount,
+      additionalAccounts: importedAccounts.skip(1).toList(growable: false),
+      transactions: importedTransactions,
+      createdPeriodIds: periods,
+      actionTitle: 'Синхронизация Сбера',
+      rawPayload: jsonEncode({
+        'source': 'sber-cef-read-only',
+        'observedAt': snapshot.observedAt.toIso8601String(),
+        'transactionIds': importedTransactions.map((item) => item.id).toList(),
+      }),
+    );
+    final updated = updatedBeforeImport.clamp(0, importedTransactions.length);
+    return SberImportSummary(
+      found: importedTransactions.length,
+      newCount: created,
+      updatedCount: updated,
+      unchangedCount: (importedTransactions.length - created - updated).clamp(
+        0,
+        importedTransactions.length,
+      ),
+      accountsFound: importedAccounts.length,
+      accountsUpdated: accountsUpdated,
+      accounts: accountItems,
+      transactions: transactionItems,
+      recategorizedCount: recategorizedCount,
+    );
+  }
+
   Future<void> addExpense({
     required BudgetPeriod period,
     required int amount,
@@ -742,8 +1021,18 @@ class BudgetController extends ChangeNotifier {
   Future<void> updateTransaction(BudgetTransaction transaction) async {
     final canonical = _synoball.transactionById(transaction.id);
     if (canonical == null) return;
+    final categoryChanged =
+        transaction.categoryId != canonical.effectiveCategory;
+    final updated = categoryChanged
+        ? transaction.copyWith(
+            tags: {
+              ...transaction.tags.where((tag) => tag != qestoAutoCategoryTag),
+              qestoManualCategoryTag,
+            }.toList(),
+          )
+        : transaction;
     _synoball.updateTransaction(
-      _legacyBridge.canonicalFromQesto(transaction, previous: canonical),
+      _legacyBridge.canonicalFromQesto(updated, previous: canonical),
       actorId: _userId,
     );
     _syncFromSynoball();
@@ -757,8 +1046,18 @@ class BudgetController extends ChangeNotifier {
     for (final transaction in transactions) {
       final canonical = _synoball.transactionById(transaction.id);
       if (canonical == null) continue;
+      final categoryChanged =
+          transaction.categoryId != canonical.effectiveCategory;
+      final updated = categoryChanged
+          ? transaction.copyWith(
+              tags: {
+                ...transaction.tags.where((tag) => tag != qestoAutoCategoryTag),
+                qestoManualCategoryTag,
+              }.toList(),
+            )
+          : transaction;
       _synoball.updateTransaction(
-        _legacyBridge.canonicalFromQesto(transaction, previous: canonical),
+        _legacyBridge.canonicalFromQesto(updated, previous: canonical),
         actorId: _userId,
       );
       changed = true;
@@ -1069,8 +1368,8 @@ class BudgetController extends ChangeNotifier {
           transaction.merchant ??
           '',
       merchant:
-          transaction.normalizedMerchant ??
           transaction.merchant ??
+          transaction.normalizedMerchant ??
           transaction.title,
       providerCategory: transaction.originalCategoryId,
       category: transaction.categoryId,

@@ -19,7 +19,15 @@ class QestoReadModelService {
     return QestoFinancialReadModel(
       accounts: state.accounts.map(_account).toList(growable: false),
       transactions: state.transactions
-          .where((item) => item.status == CanonicalTransactionStatus.posted)
+          // Pending operations are real bank observations and must remain
+          // visible for review. Reversed/deleted operations stay out of the
+          // Qesto list; cash-flow projections can still choose to use only
+          // posted transactions through the Synoball analytics service.
+          .where(
+            (item) =>
+                item.status != CanonicalTransactionStatus.deleted &&
+                item.status != CanonicalTransactionStatus.reversed,
+          )
           .map((item) => _transaction(item, receipts[item.receiptId]))
           .toList(growable: false),
     );
@@ -65,7 +73,9 @@ class QestoReadModelService {
     isLargePurchase: value.tags.contains('qesto-large-purchase'),
     normalizedMerchant: value.merchantName?.toLowerCase(),
     isRecurring: value.isRecurring || value.tags.contains('qesto-recurring'),
-    isConfirmed: !value.tags.contains('qesto-unconfirmed'),
+    isConfirmed:
+        !value.tags.contains('qesto-unconfirmed') &&
+        value.status != CanonicalTransactionStatus.pending,
     isPotentialDuplicate: value.tags.contains('qesto-potential-duplicate'),
     classificationConfidence:
         value.categoryConfidence ?? value.merchantConfidence ?? 1,

@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qesto/data/models/qesto_models.dart';
 import 'package:qesto/features/budget/state/budget_controller.dart';
+import 'package:qesto/features/bank_browser/sber/sber_connector_models.dart';
 import 'package:qesto/features/statistics/domain/services/data_quality_service.dart';
 import 'package:qesto/features/statistics/domain/services/statistics_calculation_service.dart';
 import 'package:qesto/mocks/fixtures/budget_categories.dart';
@@ -264,4 +265,36 @@ void main() {
       expect(controller.transactions.single.date, DateTime(2000, 1));
     },
   );
+
+  test('Sber history is retained when products page has a parser mismatch', () async {
+    final controller = buildController();
+    final snapshot = SberSyncSnapshot(
+      observedAt: DateTime(2026, 8, 30),
+      accounts: const [],
+      transactions: [
+        SberTransactionFact(
+          sourceId: 'operation-without-account',
+          accountId: '',
+          date: DateTime(2026, 8, 29, 12, 30),
+          amount: 1500,
+          currency: 'RUB',
+          description: 'Перевод от пользователя',
+          status: 'POSTED',
+          fingerprint: 'sber-transaction-test',
+          isTransfer: true,
+          isIncome: true,
+        ),
+      ],
+      oldestTransaction: DateTime(2026, 8, 29),
+      newestTransaction: DateTime(2026, 8, 29),
+      pendingCount: 0,
+      pageType: SberPageType.transactions,
+    );
+
+    final result = await controller.importSberSnapshot(snapshot);
+
+    expect(result.found, 1);
+    expect(controller.transactions.single.accountId, 'local-default-account');
+    expect(controller.transactions.single.type, TransactionType.income);
+  });
 }

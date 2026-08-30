@@ -50,6 +50,7 @@ enum DesktopDestination {
   ),
   accounts('Счета', Icons.account_balance_wallet_outlined, null),
   insights('ИИ', Icons.auto_awesome_outlined, null),
+  connections('Подключения', Icons.account_balance_outlined, null),
   benefits(
     'Предложения',
     Icons.local_offer_outlined,

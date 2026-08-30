@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../core/theme/qesto_theme.dart';
 import '../../data/models/qesto_models.dart';
 import '../../features/budget/state/budget_controller.dart';
+import '../../features/budget/services/cash_flow_calculation_service.dart';
 import '../desktop_financial_helpers.dart';
 
 enum OverviewPrimaryMetric { expenses, income }
@@ -64,9 +65,8 @@ class DesktopOverviewData {
     final transactions = controller.transactionsFor(period);
     final summary = controller.summaryFor(period);
     final expenses = math.max(0, summary.currentExpense);
-    final income = transactions
-        .where((item) => item.type == TransactionType.income)
-        .fold<int>(0, (sum, item) => sum + item.amount);
+    final cashFlow = controller.cashFlowFor(period);
+    final income = cashFlow.externalInflows;
     final state = controller.financialState;
     final capital =
         (state.assets.minorUnits - state.debts.minorUnits).round() ~/ 100;
@@ -111,7 +111,7 @@ class DesktopOverviewData {
       currency: period.currency,
       expenses: expenses,
       income: income,
-      cashFlow: income - expenses,
+      cashFlow: cashFlow.netCashFlow,
       capital: capital,
       investments: investments,
       savings: savings,
@@ -282,7 +282,9 @@ class DesktopOverviewData {
 
     final incomeGroups = <String, int>{};
     for (final transaction in transactions.where(
-      (item) => item.type == TransactionType.income,
+      (item) =>
+          controller.cashFlowTreatment(item) ==
+          CashFlowTreatment.externalInflow,
     )) {
       final label = desktopTransactionTitle(transaction);
       incomeGroups.update(
@@ -304,7 +306,8 @@ class DesktopOverviewData {
           transactionCount: transactions
               .where(
                 (item) =>
-                    item.type == TransactionType.income &&
+                    controller.cashFlowTreatment(item) ==
+                        CashFlowTreatment.externalInflow &&
                     desktopTransactionTitle(item) == entry.key,
               )
               .length,

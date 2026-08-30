@@ -6,6 +6,7 @@ import '../../core/formatters/qesto_formatters.dart';
 import '../../core/theme/qesto_theme.dart';
 import '../../data/models/qesto_models.dart';
 import '../../features/budget/state/budget_controller.dart';
+import '../../features/budget/services/cash_flow_calculation_service.dart';
 import '../desktop_financial_helpers.dart';
 import '../widgets/desktop_charts.dart';
 import '../widgets/desktop_components.dart';
@@ -31,10 +32,17 @@ class _DesktopCashFlowPageState extends State<DesktopCashFlowPage> {
         final periods = _selectedPeriods();
         final transactions = _transactionsFor(periods);
         final points = _points(periods);
-        final totalIncome = _income(transactions);
-        final totalExpenses = _ordinaryExpenses(transactions);
-        final totalOutflow = _outflow(transactions);
-        final net = totalIncome - totalOutflow;
+        final summary = periods.isEmpty
+            ? null
+            : widget.controller.cashFlowForRange(
+                from: periods.first.startDate,
+                toExclusive: periods.last.endDate.add(const Duration(days: 1)),
+                currency: periods.first.currency,
+              );
+        final totalIncome = summary?.externalInflows ?? 0;
+        final totalOutflow = summary?.externalOutflows ?? 0;
+        final totalExpenses = totalOutflow;
+        final net = summary?.netCashFlow ?? 0;
         final savingsRate = totalIncome <= 0 ? 0.0 : net / totalIncome;
         final currency =
             periods.firstOrNull?.currency ??
@@ -251,22 +259,16 @@ class _DesktopCashFlowPageState extends State<DesktopCashFlowPage> {
   int _income(Iterable<BudgetTransaction> transactions) => transactions
       .where(
         (item) =>
-            item.type == TransactionType.income ||
-            item.type == TransactionType.refund,
+            widget.controller.cashFlowTreatment(item) ==
+            CashFlowTreatment.externalInflow,
       )
       .fold<int>(0, (sum, item) => sum + item.amount);
-
-  int _ordinaryExpenses(Iterable<BudgetTransaction> transactions) =>
-      transactions
-          .where((item) => item.type == TransactionType.expense)
-          .fold<int>(0, (sum, item) => sum + item.amount);
 
   int _outflow(Iterable<BudgetTransaction> transactions) => transactions
       .where(
         (item) =>
-            item.type == TransactionType.expense ||
-            item.type == TransactionType.savingsTransfer ||
-            item.type == TransactionType.investment,
+            widget.controller.cashFlowTreatment(item) ==
+            CashFlowTreatment.externalOutflow,
       )
       .fold<int>(0, (sum, item) => sum + item.amount);
 
@@ -278,15 +280,15 @@ class _DesktopCashFlowPageState extends State<DesktopCashFlowPage> {
     if (firstIndex <= 0) return 0;
     final start = math.max(0, firstIndex - selected.length);
     final previous = widget.controller.periods.sublist(start, firstIndex);
-    return _ordinaryExpenses(_transactionsFor(previous));
+    return _outflow(_transactionsFor(previous));
   }
 
   Map<String, int> _groupedIncome(Iterable<BudgetTransaction> transactions) {
     final result = <String, int>{};
     for (final transaction in transactions.where(
       (item) =>
-          item.type == TransactionType.income ||
-          item.type == TransactionType.refund,
+          widget.controller.cashFlowTreatment(item) ==
+          CashFlowTreatment.externalInflow,
     )) {
       final title = desktopTransactionTitle(transaction);
       result.update(
@@ -301,7 +303,9 @@ class _DesktopCashFlowPageState extends State<DesktopCashFlowPage> {
   Map<String, int> _groupedExpenses(Iterable<BudgetTransaction> transactions) {
     final result = <String, int>{};
     for (final transaction in transactions.where(
-      (item) => item.type == TransactionType.expense,
+      (item) =>
+          widget.controller.cashFlowTreatment(item) ==
+          CashFlowTreatment.externalOutflow,
     )) {
       final title = desktopCategoryName(widget.controller, transaction);
       result.update(
@@ -321,9 +325,8 @@ class _DesktopCashFlowPageState extends State<DesktopCashFlowPage> {
     final groups = <String, List<BudgetTransaction>>{};
     for (final transaction in transactions.where(
       (item) =>
-          item.type == TransactionType.expense ||
-          item.type == TransactionType.savingsTransfer ||
-          item.type == TransactionType.investment,
+          widget.controller.cashFlowTreatment(item) ==
+          CashFlowTreatment.externalOutflow,
     )) {
       final id = switch (transaction.type) {
         TransactionType.savingsTransfer => '__savings',

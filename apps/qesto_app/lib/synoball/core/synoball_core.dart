@@ -354,7 +354,10 @@ class SynoballCore {
         id: transactionId,
         entityId: candidate.entityId,
         accountId: candidate.accountId,
-        status: CanonicalTransactionStatus.posted,
+        status: _statusFromCandidate(
+          candidate,
+          fallback: CanonicalTransactionStatus.posted,
+        ),
         amount: candidate.amount,
         direction: candidate.direction,
         occurredAt: candidate.occurredAt,
@@ -463,6 +466,7 @@ class SynoballCore {
               : current.subcategoryId,
           transferDirection:
               candidate.transferDirection ?? current.transferDirection,
+          status: _statusFromCandidate(candidate, fallback: current.status),
           receiptId: candidate.receiptId ?? current.receiptId,
           tags: tags,
           updatedAt: now,
@@ -508,6 +512,33 @@ class SynoballCore {
       transactionId: transactionId,
       created: created,
     );
+  }
+
+  /// Bank feeds may observe the same operation while it is processing and
+  /// later report it as posted (or cancelled).  Keep that lifecycle in the
+  /// canonical transaction instead of treating the status tag as UI-only.
+  /// The adapter remains the owner of provider-specific tags; Synoball only
+  /// understands the small, stable status vocabulary below.
+  CanonicalTransactionStatus _statusFromCandidate(
+    TransactionCandidate candidate, {
+    required CanonicalTransactionStatus fallback,
+  }) {
+    final tags = candidate.tags.map((value) => value.toLowerCase()).toSet();
+    if (tags.contains('sber-status-pending') ||
+        tags.contains('status-pending')) {
+      return CanonicalTransactionStatus.pending;
+    }
+    if (tags.contains('sber-status-cancelled') ||
+        tags.contains('status-cancelled')) {
+      return CanonicalTransactionStatus.reversed;
+    }
+    if (tags.contains('sber-status-posted') ||
+        tags.contains('status-posted') ||
+        tags.contains('sber-status-refund') ||
+        tags.contains('status-refund')) {
+      return CanonicalTransactionStatus.posted;
+    }
+    return fallback;
   }
 
   void _refreshDerivedData() {

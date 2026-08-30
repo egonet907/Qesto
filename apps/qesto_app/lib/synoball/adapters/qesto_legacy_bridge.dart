@@ -166,7 +166,7 @@ class QestoLegacyBridge {
           value.title ??
           value.merchant ??
           '',
-      merchant: value.normalizedMerchant ?? value.merchant ?? value.title,
+      merchant: value.merchant ?? value.normalizedMerchant ?? value.title,
       providerCategory: value.originalCategoryId,
       category: value.categoryId,
       subcategoryId: value.subcategoryId,

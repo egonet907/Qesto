@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../core/formatters/qesto_formatters.dart';
+import '../core/platform/qesto_command_line.dart';
 import '../core/theme/qesto_theme.dart';
 import '../data/models/qesto_models.dart';
 import '../features/budget/add_expense_screen.dart';
@@ -17,6 +18,7 @@ import 'desktop_destination.dart';
 import 'desktop_financial_helpers.dart';
 import 'pages/desktop_accounts_page.dart';
 import 'pages/desktop_budget_page.dart';
+import 'pages/desktop_bank_connections_page.dart';
 import 'pages/desktop_cash_flow_page.dart';
 import 'pages/desktop_dashboard_page.dart';
 import 'pages/desktop_recurring_page.dart';
@@ -43,7 +45,11 @@ class DesktopAppShell extends StatefulWidget {
 }
 
 class _DesktopAppShellState extends State<DesktopAppShell> {
-  var _destination = DesktopDestination.dashboard;
+  late var _destination =
+      (hasQestoCommandLineArgument('--qesto-bank-browser-smoke') ||
+          hasQestoCommandLineArgument('--qesto-bank-browser-dev'))
+      ? DesktopDestination.connections
+      : DesktopDestination.dashboard;
   var _sidebarCollapsed = false;
   String? _dashboardPeriodId;
   String? _requestedTransactionId;
@@ -196,6 +202,9 @@ class _DesktopAppShellState extends State<DesktopAppShell> {
       controller: widget.controller,
     ),
     DesktopDestination.insights => DesktopInsightsPage(
+      controller: widget.controller,
+    ),
+    DesktopDestination.connections => DesktopBankConnectionsPage(
       controller: widget.controller,
     ),
     DesktopDestination.benefits => DesktopBenefitsPage(
