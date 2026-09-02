@@ -14,6 +14,61 @@ enum AccountType {
   other,
 }
 
+enum QestoAccountRole {
+  everyday,
+  emergency,
+  savings,
+  salary,
+  mandatoryPayments,
+  other,
+}
+
+/// User-owned account metadata. It intentionally lives outside Synoball:
+/// changing how Qesto presents or analyses an account must not mutate the
+/// canonical bank account received from an adapter.
+class QestoAccountPreferences {
+  const QestoAccountPreferences({
+    required this.accountId,
+    required this.role,
+    this.includeInTotal = true,
+    this.includeInNetWorth = true,
+    this.includeInEmergencyFund = false,
+    this.isVisible = true,
+    this.includeTransactionsInAnalytics = true,
+    this.isClosed = false,
+  });
+
+  final String accountId;
+  final QestoAccountRole role;
+  final bool includeInTotal;
+  final bool includeInNetWorth;
+  final bool includeInEmergencyFund;
+  final bool isVisible;
+  final bool includeTransactionsInAnalytics;
+  final bool isClosed;
+
+  QestoAccountPreferences copyWith({
+    QestoAccountRole? role,
+    bool? includeInTotal,
+    bool? includeInNetWorth,
+    bool? includeInEmergencyFund,
+    bool? isVisible,
+    bool? includeTransactionsInAnalytics,
+    bool? isClosed,
+  }) => QestoAccountPreferences(
+    accountId: accountId,
+    role: role ?? this.role,
+    includeInTotal: includeInTotal ?? this.includeInTotal,
+    includeInNetWorth: includeInNetWorth ?? this.includeInNetWorth,
+    includeInEmergencyFund:
+        includeInEmergencyFund ?? this.includeInEmergencyFund,
+    isVisible: isVisible ?? this.isVisible,
+    includeTransactionsInAnalytics:
+        includeTransactionsInAnalytics ?? this.includeTransactionsInAnalytics,
+    isClosed: isClosed ?? this.isClosed,
+  );
+}
+
 enum DealKind { coupon, promotion }
 
 enum FinancialActionType { statementImport, transactionAdded }
@@ -254,6 +309,7 @@ class UserFinancialData {
     required this.user,
     required this.referenceDate,
     this.accounts = const [],
+    this.accountPreferences = const [],
     this.budgetPeriods = const [],
     this.categoryBudgets = const [],
     this.categoryCustomizations = const [],
@@ -269,6 +325,7 @@ class UserFinancialData {
   final QestoUser user;
   final DateTime referenceDate;
   final List<QestoAccount> accounts;
+  final List<QestoAccountPreferences> accountPreferences;
   final List<BudgetPeriod> budgetPeriods;
   final List<CategoryBudget> categoryBudgets;
   final List<BudgetCategoryCustomization> categoryCustomizations;
@@ -284,6 +341,7 @@ class UserFinancialData {
     QestoUser? user,
     DateTime? referenceDate,
     List<QestoAccount>? accounts,
+    List<QestoAccountPreferences>? accountPreferences,
     List<BudgetPeriod>? budgetPeriods,
     List<CategoryBudget>? categoryBudgets,
     List<BudgetCategoryCustomization>? categoryCustomizations,
@@ -299,6 +357,7 @@ class UserFinancialData {
       user: user ?? this.user,
       referenceDate: referenceDate ?? this.referenceDate,
       accounts: accounts ?? this.accounts,
+      accountPreferences: accountPreferences ?? this.accountPreferences,
       budgetPeriods: budgetPeriods ?? this.budgetPeriods,
       categoryBudgets: categoryBudgets ?? this.categoryBudgets,
       categoryCustomizations:

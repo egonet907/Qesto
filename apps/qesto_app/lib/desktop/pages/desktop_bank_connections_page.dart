@@ -846,6 +846,11 @@ class _BankBrowserPageState extends State<BankBrowserPage> {
                   _syncMetric('Без изменений', summary.unchangedCount),
                   _syncMetric('Счетов найдено', summary.accountsFound),
                   _syncMetric('Балансов обновлено', summary.accountsUpdated),
+                  if (summary.accountsMerged > 0)
+                    _syncMetric(
+                      'Дубликатов счетов объединено',
+                      summary.accountsMerged,
+                    ),
                   _syncMetric('В обработке', snapshot.pendingCount),
                   const SizedBox(height: 8),
                   Text('Период: $period'),
@@ -855,12 +860,23 @@ class _BankBrowserPageState extends State<BankBrowserPage> {
                       'История: ${snapshot.historyRowsAccepted} денежных операций из ${snapshot.historyRowsSeen} записей',
                       style: const TextStyle(color: QestoColors.secondaryText),
                     ),
+                    if (snapshot.historyHasMoreRows &&
+                        !snapshot.historyRangeBoundaryReached)
+                      const Text(
+                        'История дочитана не полностью: на странице осталась кнопка «Показать ещё».',
+                        style: TextStyle(color: QestoColors.warning),
+                      ),
                     if (snapshot.historyRewardRows > 0)
                       Text(
                         'СберСпасибо: ${snapshot.historyRewardRows} неденежных операций',
                         style: const TextStyle(
                           color: QestoColors.secondaryText,
                         ),
+                      ),
+                    if (snapshot.historyRowsRejected > 0)
+                      Text(
+                        'Не распознано строк: ${snapshot.historyRowsRejected}. Результат нельзя считать полным.',
+                        style: const TextStyle(color: QestoColors.warning),
                       ),
                     if (snapshot.historyLoyaltyRewards >
                         snapshot.historyRewardRows)

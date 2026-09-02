@@ -267,6 +267,58 @@ class SynoballCore {
     if (!used) _accounts.removeWhere((item) => item.id == accountId);
   }
 
+  /// Repoints every canonical operation from a duplicate account to the
+  /// authoritative account and then removes the duplicate. This is used when
+  /// a provider exposes the same bank account through both an account route
+  /// and one of its linked cards, or changes an unstable DOM identifier.
+  int mergeAccountInto({
+    required String duplicateAccountId,
+    required String primaryAccountId,
+    required String actorId,
+    String purpose = 'Merge duplicate financial accounts',
+  }) {
+    if (duplicateAccountId == primaryAccountId) return 0;
+    if (!_accounts.any((item) => item.id == primaryAccountId)) {
+      throw StateError('Primary account not found: $primaryAccountId');
+    }
+    if (!_accounts.any((item) => item.id == duplicateAccountId)) return 0;
+
+    var migrated = 0;
+    final now = DateTime.now();
+    for (var index = 0; index < _transactions.length; index++) {
+      final transaction = _transactions[index];
+      if (transaction.accountId != duplicateAccountId) continue;
+      _transactions[index] = transaction.copyWith(
+        accountId: primaryAccountId,
+        updatedAt: now,
+      );
+      migrated += 1;
+    }
+    _accounts.removeWhere((item) => item.id == duplicateAccountId);
+    _audit(
+      actorId: actorId,
+      action: 'account.merged',
+      entityId: _accounts
+          .firstWhere((item) => item.id == primaryAccountId)
+          .entityId,
+      purpose: purpose,
+      subjectId: primaryAccountId,
+    );
+    _emit(
+      type: 'account.merged',
+      entityId: _accounts
+          .firstWhere((item) => item.id == primaryAccountId)
+          .entityId,
+      subjectId: primaryAccountId,
+      payload: {
+        'duplicateAccountId': duplicateAccountId,
+        'migratedTransactions': migrated,
+      },
+    );
+    _refreshDerivedData();
+    return migrated;
+  }
+
   void updateTransaction(
     CanonicalTransaction transaction, {
     required String actorId,
@@ -643,7 +695,8 @@ bool _shouldReplaceOccurredAt({
       current.occurredAt.hour != 0 ||
       current.occurredAt.minute != 0 ||
       current.occurredAt.second != 0;
-  if (incomingSource == SynoballSourceType.statement &&
+  if ((incomingSource == SynoballSourceType.statement ||
+          incomingSource == SynoballSourceType.bankScreenshot) &&
       incomingIsDateOnly &&
       currentHasTime) {
     return false;
@@ -654,8 +707,12 @@ bool _shouldReplaceOccurredAt({
 int _timePrecisionRank(SynoballSourceType source) => switch (source) {
   SynoballSourceType.receipt => 6,
   SynoballSourceType.manual || SynoballSourceType.manualVoice => 5,
-  SynoballSourceType.androidNotification => 5,
-  SynoballSourceType.directApi || SynoballSourceType.regulatedApi => 4,
+  SynoballSourceType.androidNotification ||
+  SynoballSourceType.smsNotification => 5,
+  SynoballSourceType.bankWeb ||
+  SynoballSourceType.directApi ||
+  SynoballSourceType.regulatedApi => 4,
+  SynoballSourceType.bankScreenshot => 3,
   SynoballSourceType.statement => 2,
   SynoballSourceType.legacy || SynoballSourceType.modelInference => 1,
 };
@@ -663,9 +720,13 @@ int _timePrecisionRank(SynoballSourceType source) => switch (source) {
 int _sourceDetailRank(SynoballSourceType source) => switch (source) {
   SynoballSourceType.receipt => 6,
   SynoballSourceType.manual || SynoballSourceType.manualVoice => 5,
-  SynoballSourceType.directApi || SynoballSourceType.regulatedApi => 5,
+  SynoballSourceType.bankWeb ||
+  SynoballSourceType.directApi ||
+  SynoballSourceType.regulatedApi => 5,
+  SynoballSourceType.bankScreenshot => 4,
   SynoballSourceType.statement => 4,
-  SynoballSourceType.androidNotification => 3,
+  SynoballSourceType.androidNotification ||
+  SynoballSourceType.smsNotification => 3,
   SynoballSourceType.legacy || SynoballSourceType.modelInference => 1,
 };
 

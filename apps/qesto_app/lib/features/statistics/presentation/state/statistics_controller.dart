@@ -14,12 +14,44 @@ class StatisticsController extends ChangeNotifier {
       (period) => period.contains(budgetController.referenceDate),
       orElse: () => budgetController.periods.last,
     );
-    _query = StatisticsQuery(
-      period: StatisticsDateRange(
-        activePeriod.startDate,
-        budgetController.referenceDate,
-      ),
+    var initialRange = StatisticsDateRange(
+      activePeriod.startDate,
+      budgetController.referenceDate,
     );
+    var initialPreset = StatisticsPeriodPreset.currentBudget;
+    final hasOperationsInActiveRange = budgetController.transactions.any(
+      (transaction) => initialRange.contains(transaction.date),
+    );
+    if (!hasOperationsInActiveRange &&
+        budgetController.transactions.isNotEmpty) {
+      final newest = budgetController.transactions
+          .map((item) => item.date)
+          .reduce((left, right) => left.isAfter(right) ? left : right);
+      final recentEnd = newest.isAfter(budgetController.referenceDate)
+          ? newest
+          : budgetController.referenceDate;
+      final recentRange = StatisticsDateRange(
+        recentEnd.subtract(const Duration(days: 29)),
+        recentEnd,
+      );
+      if (budgetController.transactions.any(
+        (transaction) => recentRange.contains(transaction.date),
+      )) {
+        initialRange = recentRange;
+        initialPreset = StatisticsPeriodPreset.last30Days;
+      } else {
+        final latestPeriod = budgetController.periods.firstWhere(
+          (period) => period.contains(newest),
+          orElse: () => budgetController.periods.last,
+        );
+        initialRange = StatisticsDateRange(
+          latestPeriod.startDate,
+          latestPeriod.endDate,
+        );
+        initialPreset = StatisticsPeriodPreset.custom;
+      }
+    }
+    _query = StatisticsQuery(period: initialRange, preset: initialPreset);
     _tracked.addAll([
       const TrackedStatisticsItem(
         id: 'cafes',

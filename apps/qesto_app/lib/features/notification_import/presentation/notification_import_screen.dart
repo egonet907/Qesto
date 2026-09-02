@@ -7,6 +7,7 @@ import '../../../core/widgets/qesto_card.dart';
 import '../../../data/models/qesto_models.dart';
 import '../../budget/add_expense_screen.dart';
 import '../../budget/state/budget_controller.dart';
+import '../../transaction_import/services/transaction_account_resolver.dart';
 import '../data/notification_capture_service.dart';
 import '../domain/parsed_bank_transaction.dart';
 import '../services/bank_notification_parser.dart';
@@ -125,11 +126,11 @@ class _NotificationImportScreenState extends State<NotificationImportScreen> {
     }
   }
 
-  BudgetPeriod? _periodFor(DateTime date) {
+  BudgetPeriod _periodFor(DateTime date) {
     for (final period in widget.controller.periods) {
       if (period.contains(date)) return period;
     }
-    return null;
+    return widget.controller.periodForOrCreate(date);
   }
 
   QestoAccount get _defaultAccount {
@@ -138,6 +139,27 @@ class _NotificationImportScreenState extends State<NotificationImportScreen> {
       orElse: () => widget.controller.accounts.first,
     );
   }
+
+  QestoAccount _accountFor(ParsedBankTransaction transaction) {
+    final resolution = const TransactionAccountResolver().resolve(
+      accounts: widget.controller.accounts,
+      accountHint: transaction.accountHint,
+      bankHint: transaction.bankHint,
+    );
+    if (resolution == null) return _defaultAccount;
+    return widget.controller.accounts.firstWhere(
+      (account) => account.id == resolution.accountId,
+      orElse: () => _defaultAccount,
+    );
+  }
+
+  TransactionType _typeFor(ParsedBankTransaction transaction) =>
+      switch (transaction.kind) {
+        ParsedBankTransactionKind.expense => TransactionType.expense,
+        ParsedBankTransactionKind.income => TransactionType.income,
+        ParsedBankTransactionKind.transfer => TransactionType.transfer,
+        ParsedBankTransactionKind.refund => TransactionType.refund,
+      };
 
   String _categoryName(String categoryId) {
     return widget.controller.categories
@@ -196,26 +218,28 @@ class _NotificationImportScreenState extends State<NotificationImportScreen> {
     ParsedBankTransaction transaction,
   ) async {
     final period = _periodFor(transaction.date);
-    if (period == null) return;
-
-    await widget.controller.addAndroidNotificationExpense(
+    await widget.controller.addNotificationTransaction(
       period: period,
       amountMinor: transaction.amountMinor,
+      currency: transaction.currency,
       date: transaction.date,
+      type: _typeFor(transaction),
       categoryId: transaction.categoryId,
-      accountId: _defaultAccount.id,
+      accountId: _accountFor(transaction).id,
       title: transaction.merchant,
       notificationKey: notification.notificationKey,
       packageName: notification.packageName,
-      rawNotification: '${notification.title}\n${notification.text}',
+      rawNotification: notification.fullText,
+      sender: notification.title,
       subcategoryId: transaction.subcategoryId,
+      isSmsNotification: transaction.isSmsNotification,
       confidence: transaction.confidence,
     );
     final removed = await _removeNotification(notification.notificationKey);
     if (removed && mounted) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Расход добавлен в бюджет')));
+      ).showSnackBar(const SnackBar(content: Text('Операция добавлена')));
     }
   }
 
@@ -224,16 +248,16 @@ class _NotificationImportScreenState extends State<NotificationImportScreen> {
     ParsedBankTransaction transaction,
   ) async {
     final period = _periodFor(transaction.date);
-    if (period == null || !transaction.hasWholeCurrencyAmount) return;
+    if (!transaction.hasWholeCurrencyAmount) return;
 
     final draft = BudgetTransaction(
       id: 'import-draft-${notification.notificationKey.hashCode}',
       userId: period.userId,
-      accountId: _defaultAccount.id,
+      accountId: _accountFor(transaction).id,
       date: transaction.date,
       amount: transaction.wholeCurrencyAmount,
       currency: transaction.currency,
-      type: TransactionType.expense,
+      type: _typeFor(transaction),
       categoryId: transaction.categoryId,
       subcategoryId: transaction.subcategoryId,
       merchant: transaction.merchant,
@@ -317,7 +341,7 @@ class _NotificationImportScreenState extends State<NotificationImportScreen> {
                 return _ParsedTransactionCard(
                   transaction: transaction,
                   categoryName: _categoryName(transaction.categoryId),
-                  hasPeriod: _periodFor(transaction.date) != null,
+                  hasPeriod: true,
                   onDiscard: () => _discard(notification),
                   onEdit: () => _edit(notification, transaction),
                   onAdd: () => _add(notification, transaction),

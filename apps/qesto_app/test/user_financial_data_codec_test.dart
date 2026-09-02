@@ -23,6 +23,13 @@ void main() {
           type: AccountType.bankCard,
         ),
       ],
+      accountPreferences: const [
+        QestoAccountPreferences(
+          accountId: 'account-1',
+          role: QestoAccountRole.salary,
+          includeInEmergencyFund: true,
+        ),
+      ],
       categoryCustomizations: const [
         BudgetCategoryCustomization(
           categoryId: 'groceries',
@@ -105,6 +112,8 @@ void main() {
 
     expect(restored.user.id, source.user.id);
     expect(restored.accounts.single.type, AccountType.bankCard);
+    expect(restored.accountPreferences.single.role, QestoAccountRole.salary);
+    expect(restored.accountPreferences.single.includeInEmergencyFund, isTrue);
     expect(restored.transactions.single.type, TransactionType.transfer);
     expect(
       restored.transactions.single.transferDirection,
@@ -149,6 +158,12 @@ void main() {
 
     expect(restored.transactions.single.id, 'imported-operation');
     expect(restored.transactions.single.tags, ['statement-import']);
+    final today = DateTime.now();
+    expect(
+      restored.referenceDate,
+      DateTime(today.year, today.month, today.day),
+      reason: 'analytics must not reuse the previous launch date',
+    );
   });
 
   test('local repository deletes only private financial data', () async {

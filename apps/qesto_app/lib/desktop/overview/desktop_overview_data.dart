@@ -83,8 +83,8 @@ class DesktopOverviewData {
         transactions
             .where(
               (item) =>
-                  item.type == TransactionType.expense &&
-                  !(item.isPotentialDuplicate && !item.isConfirmed),
+                  controller.calculationService.isConsumerTransaction(item) &&
+                  controller.calculationService.signedExpense(item) > 0,
             )
             .toList(growable: false)
           ..sort((left, right) => right.amount.compareTo(left.amount));
@@ -145,11 +145,7 @@ class DesktopOverviewData {
       if (!controller.calculationService.isConsumerTransaction(transaction)) {
         continue;
       }
-      final amount = switch (transaction.type) {
-        TransactionType.expense => transaction.amount,
-        TransactionType.refund => -transaction.amount,
-        _ => 0,
-      };
+      final amount = controller.calculationService.signedExpense(transaction);
       if (amount == 0) continue;
       final date = DateTime(
         transaction.date.year,
@@ -181,11 +177,7 @@ class DesktopOverviewData {
       if (!controller.calculationService.isConsumerTransaction(transaction)) {
         continue;
       }
-      final amount = switch (transaction.type) {
-        TransactionType.expense => transaction.amount,
-        TransactionType.refund => -transaction.amount,
-        _ => 0,
-      };
+      final amount = controller.calculationService.signedExpense(transaction);
       if (amount == 0) continue;
       final id = transaction.categoryId ?? 'uncategorized';
       amounts.update(id, (value) => value + amount, ifAbsent: () => amount);
@@ -211,8 +203,8 @@ class DesktopOverviewData {
               .where(
                 (item) =>
                     (item.categoryId ?? 'uncategorized') == entry.key &&
-                    item.type == TransactionType.expense &&
-                    !(item.isPotentialDuplicate && !item.isConfirmed),
+                    controller.calculationService.isConsumerTransaction(item) &&
+                    controller.calculationService.signedExpense(item) > 0,
               )
               .toList(growable: false),
         ),
@@ -341,7 +333,7 @@ class DesktopOverviewData {
       sources.add(
         OverviewFlowNode(
           id: 'source-reserve',
-          label: 'Из накопленного остатка',
+          label: 'Покрыто начальным остатком',
           amount: outflow - income,
           color: QestoColors.orange,
           transactionCount: 0,
@@ -405,15 +397,15 @@ class DesktopOverviewData {
     if (income > outflow) {
       categories.add(
         OverviewFlowBranch(
-          id: 'remainder',
-          label: 'Остаток периода',
+          id: 'remaining-income',
+          label: 'Доходы сверх расходов',
           amount: income - outflow,
           color: const Color(0xFF68B96B),
           iconKey: 'savings',
           destinations: [
             OverviewFlowNode(
-              id: 'remainder-available',
-              label: 'Не распределено',
+              id: 'remaining-on-accounts',
+              label: 'Разница за период',
               amount: income - outflow,
               color: const Color(0xFF68B96B),
               transactionCount: 0,

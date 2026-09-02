@@ -97,6 +97,20 @@ void main() {
     expect(result.netCashFlow, 6000);
   });
 
+  test('an external outgoing transfer remains an outflow before migration', () {
+    final result = calculate([
+      transaction(
+        id: 'legacy-outgoing-person',
+        amount: 4000,
+        type: TransactionType.transfer,
+        direction: TransferDirection.outgoing,
+      ),
+    ]);
+
+    expect(result.externalOutflows, 4000);
+    expect(result.netCashFlow, -4000);
+  });
+
   test('loyalty metadata never changes the monetary amount', () {
     final result = calculate([
       transaction(

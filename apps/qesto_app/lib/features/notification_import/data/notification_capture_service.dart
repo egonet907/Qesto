@@ -7,6 +7,9 @@ class CapturedNotification {
     required this.postedAt,
     required this.title,
     required this.text,
+    this.bigText = '',
+    this.subText = '',
+    this.textLines = const [],
   });
 
   final String packageName;
@@ -14,6 +17,17 @@ class CapturedNotification {
   final DateTime postedAt;
   final String title;
   final String text;
+  final String bigText;
+  final String subText;
+  final List<String> textLines;
+
+  String get fullText => <String>{
+    title.trim(),
+    text.trim(),
+    bigText.trim(),
+    subText.trim(),
+    ...textLines.map((value) => value.trim()),
+  }.where((value) => value.isNotEmpty).join('\n');
 
   factory CapturedNotification.fromMap(Map<Object?, Object?> map) {
     return CapturedNotification(
@@ -24,6 +38,13 @@ class CapturedNotification {
       ),
       title: map['title'] as String? ?? '',
       text: map['text'] as String? ?? '',
+      bigText: map['bigText'] as String? ?? '',
+      subText: map['subText'] as String? ?? '',
+      textLines:
+          (map['textLines'] as List?)
+              ?.map((value) => value.toString())
+              .toList(growable: false) ??
+          const [],
     );
   }
 }

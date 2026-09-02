@@ -32,6 +32,9 @@ object NotificationInbox {
         postedAt: Long,
         title: String,
         text: String,
+        bigText: String,
+        subText: String,
+        textLines: List<String>,
     ) {
         val prefs = context.getSharedPreferences(
             PREFS_NAME,
@@ -53,6 +56,9 @@ object NotificationInbox {
                 .put("postedAt", postedAt)
                 .put("title", title)
                 .put("text", text)
+                .put("bigText", bigText)
+                .put("subText", subText)
+                .put("textLines", JSONArray(textLines))
 
         persist(prefs, updated)
     }
@@ -80,6 +86,10 @@ object NotificationInbox {
                 "postedAt" to item.optLong("postedAt"),
                 "title" to item.optString("title"),
                 "text" to item.optString("text"),
+                "bigText" to item.optString("bigText"),
+                "subText" to item.optString("subText"),
+                "textLines" to item.optJSONArray("textLines")
+                    .toStringList(),
             )
         }
     }
@@ -201,4 +211,9 @@ object NotificationInbox {
         val items: List<JSONObject>,
         val needsRewrite: Boolean,
     )
+
+    private fun JSONArray?.toStringList(): List<String> {
+        if (this == null) return emptyList()
+        return List(length()) { index -> optString(index) }
+    }
 }

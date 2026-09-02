@@ -76,6 +76,47 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('capital accounts expose liquidity, emergency goal and details', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1440, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      QestoApp(
+        repository: MockQestoRepository(
+          delay: Duration.zero,
+          financialData: sampleUserFinancialData,
+        ),
+        preferenceStore: MemoryKeyValueStore(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('desktop-section-savings')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('desktop-destination-capital')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('total-liquid-assets')), findsOneWidget);
+    expect(find.text('Деньги на счетах'), findsOneWidget);
+    expect(find.text('Инвестиционный портфель'), findsNothing);
+
+    await tester.tap(find.byKey(const Key('emergency-goal-button')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('emergency-goal-dialog')), findsOneWidget);
+    expect(find.byKey(const Key('emergency-target-field')), findsOneWidget);
+    await tester.tap(find.text('Отмена'));
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.text('Основная карта'));
+    await tester.tap(find.text('Основная карта'));
+    await tester.pumpAndSettle();
+    expect(find.text('Детали счёта'), findsOneWidget);
+    expect(find.byKey(const Key('account-role-card-main')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('desktop permanently uses typography variant B', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1440, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));

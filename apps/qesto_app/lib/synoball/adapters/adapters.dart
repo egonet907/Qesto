@@ -105,6 +105,7 @@ abstract class _TransactionAdapter<T extends AdapterInputBase>
         contentType: contentType,
         body: input.rawPayload,
         createdAt: input.receivedAt,
+        redacted: rawPayloadRedacted,
       ),
       record: record,
       candidates: candidates,
@@ -118,6 +119,7 @@ abstract class _TransactionAdapter<T extends AdapterInputBase>
   }
 
   String get contentType => 'application/json';
+  bool get rawPayloadRedacted => false;
   ImportBatch? buildBatch(T input) => null;
   List<SynoballReceipt> buildReceipts(T input, String ingestionId) => const [];
   List<SynoballAccount> buildAccounts(T input) => const [];
@@ -199,6 +201,7 @@ class AndroidNotificationAdapter
       category: input.transaction.category,
       subcategoryId: input.transaction.subcategoryId,
       providerTransactionId: input.notificationKey,
+      transferDirection: input.transaction.transferDirection,
       tags: [...input.transaction.tags, 'android-notification'],
       confidence: input.transaction.confidence,
     ),
@@ -215,6 +218,104 @@ class AndroidNotificationAdapter
         'packageName': input.packageName,
         'notificationKey': input.notificationKey,
         'notification': input.rawPayload,
+      }),
+    );
+  }
+}
+
+class SmsNotificationAdapter extends _TransactionAdapter<SmsNotificationInput> {
+  SmsNotificationAdapter({super.ids});
+
+  @override
+  String get id => 'sms-notification';
+  @override
+  String get version => '1.0.0';
+  @override
+  SynoballSourceType get sourceType => SynoballSourceType.smsNotification;
+  @override
+  SourceTrustLevel get trust => SourceTrustLevel.androidNotification;
+  @override
+  bool get defaultRequiresConfirmation => false;
+  @override
+  List<TransactionSeed> seeds(SmsNotificationInput input) => [
+    TransactionSeed(
+      canonicalId: input.transaction.canonicalId,
+      accountId: input.transaction.accountId,
+      amount: input.transaction.amount,
+      direction: input.transaction.direction,
+      occurredAt: input.transaction.occurredAt,
+      description: input.transaction.description,
+      merchant: input.transaction.merchant,
+      providerCategory: input.transaction.providerCategory,
+      category: input.transaction.category,
+      subcategoryId: input.transaction.subcategoryId,
+      providerTransactionId: input.notificationKey,
+      transferDirection: input.transaction.transferDirection,
+      tags: [...input.transaction.tags, 'sms-notification'],
+      confidence: input.transaction.confidence,
+    ),
+  ];
+  @override
+  String get contentType => 'text/plain; charset=utf-8';
+
+  @override
+  AdaptedIngestion normalize(SmsNotificationInput input) {
+    final adapted = super.normalize(input);
+    return _withRawBody(
+      adapted,
+      jsonEncode({
+        'packageName': input.packageName,
+        'notificationKey': input.notificationKey,
+        'sender': input.sender,
+        'notification': input.rawPayload,
+      }),
+    );
+  }
+}
+
+class BankScreenshotAdapter extends _TransactionAdapter<BankScreenshotInput> {
+  BankScreenshotAdapter({super.ids});
+
+  @override
+  String get id => 'bank-screenshot';
+  @override
+  String get version => '1.0.0';
+  @override
+  SynoballSourceType get sourceType => SynoballSourceType.bankScreenshot;
+  @override
+  SourceTrustLevel get trust => SourceTrustLevel.userConfirmed;
+  @override
+  bool get defaultRequiresConfirmation => false;
+  @override
+  bool get rawPayloadRedacted => true;
+  @override
+  List<TransactionSeed> seeds(BankScreenshotInput input) => input.transactions;
+
+  @override
+  ImportBatch buildBatch(BankScreenshotInput input) => ImportBatch(
+    id: ids.next('batch'),
+    entityId: input.entityId,
+    name: input.batchName,
+    sourceType: sourceType,
+    createdAt: input.receivedAt,
+    status: ImportBatchStatus.processing,
+    totalRecords: input.transactions.length,
+    createdTransactions: 0,
+    matchedTransactions: 0,
+    failedRecords: 0,
+  );
+
+  @override
+  AdaptedIngestion normalize(BankScreenshotInput input) {
+    final adapted = super.normalize(input);
+    return _withRawBody(
+      adapted,
+      jsonEncode({
+        'source': 'local-bank-screenshot-ocr',
+        'imageHashes': input.imageHashes,
+        'parserIds': input.parserIds,
+        'candidateCount': input.transactions.length,
+        'rawTextRetained': false,
       }),
     );
   }
@@ -269,6 +370,39 @@ class StatementAdapter extends _TransactionAdapter<StatementInput> {
   SynoballSourceType get sourceType => SynoballSourceType.statement;
   @override
   SourceTrustLevel get trust => SourceTrustLevel.bankStatement;
+  @override
+  bool get defaultRequiresConfirmation => false;
+  @override
+  List<TransactionSeed> seeds(StatementInput input) => input.transactions;
+  @override
+  List<SynoballAccount> buildAccounts(StatementInput input) => [input.account];
+
+  @override
+  ImportBatch buildBatch(StatementInput input) => ImportBatch(
+    id: ids.next('batch'),
+    entityId: input.entityId,
+    name: input.batchName,
+    sourceType: sourceType,
+    createdAt: input.receivedAt,
+    status: ImportBatchStatus.processing,
+    totalRecords: input.transactions.length,
+    createdTransactions: 0,
+    matchedTransactions: 0,
+    failedRecords: 0,
+  );
+}
+
+class BankWebAdapter extends _TransactionAdapter<StatementInput> {
+  BankWebAdapter({super.ids});
+
+  @override
+  String get id => 'bank-web';
+  @override
+  String get version => '1.0.0';
+  @override
+  SynoballSourceType get sourceType => SynoballSourceType.bankWeb;
+  @override
+  SourceTrustLevel get trust => SourceTrustLevel.directApi;
   @override
   bool get defaultRequiresConfirmation => false;
   @override

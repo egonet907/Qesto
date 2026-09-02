@@ -132,33 +132,37 @@ class _VoiceTransactionConfirmationSheetState
       if (destination != null) 'Получатель: ${destination.title}',
     ].join('\n');
 
-    await widget.controller.addImportedTransactions([
-      BudgetTransaction(
-        id: 'voice-${DateTime.now().microsecondsSinceEpoch}',
-        userId: widget.period.userId,
-        accountId: source.id,
-        date: date,
-        amount: amount,
-        currency: widget.period.currency,
-        type: switch (_kind) {
-          VoiceTransactionKind.expense => TransactionType.expense,
-          VoiceTransactionKind.income => TransactionType.income,
-          VoiceTransactionKind.transfer => TransactionType.transfer,
-        },
-        categoryId: _kind == VoiceTransactionKind.expense
-            ? _category?.id
-            : null,
-        merchant: title,
-        title: title,
-        description: 'Добавлено голосом',
-        comment: details,
-        normalizedMerchant: _normalizeMerchant(title),
-        transferDirection: _kind == VoiceTransactionKind.transfer
-            ? TransferDirection.outgoing
-            : null,
-        tags: const ['voice-input'],
-      ),
-    ], actionTitle: 'Операция добавлена голосом');
+    await widget.controller.addImportedTransactions(
+      [
+        BudgetTransaction(
+          id: 'voice-${DateTime.now().microsecondsSinceEpoch}',
+          userId: widget.period.userId,
+          accountId: source.id,
+          date: date,
+          amount: amount,
+          currency: widget.period.currency,
+          type: switch (_kind) {
+            VoiceTransactionKind.expense => TransactionType.expense,
+            VoiceTransactionKind.income => TransactionType.income,
+            VoiceTransactionKind.transfer => TransactionType.transfer,
+          },
+          categoryId: _kind == VoiceTransactionKind.expense
+              ? _category?.id
+              : null,
+          merchant: title,
+          title: title,
+          description: 'Добавлено голосом',
+          comment: details,
+          normalizedMerchant: _normalizeMerchant(title),
+          transferDirection: _kind == VoiceTransactionKind.transfer
+              ? TransferDirection.outgoing
+              : null,
+          tags: const ['voice-input'],
+        ),
+      ],
+      actionTitle: 'Операция добавлена голосом',
+      confirmedVoiceInput: true,
+    );
     if (mounted) Navigator.of(context).pop(true);
   }
 

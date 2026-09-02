@@ -149,6 +149,19 @@ class SberConnector extends Stream<SberSyncReport> {
           'TRANSACTIONS_PARTIAL: использован только список операций с главной.',
         );
       }
+      if (historyExtraction.hasMoreRows &&
+          !historyExtraction.rangeBoundaryReached) {
+        warnings.add(
+          'HISTORY_RANGE_PARTIAL: история остановилась до начала выбранного '
+          'периода, на странице остались более старые операции.',
+        );
+      }
+      if (historyExtraction.rejectedRows > 0) {
+        warnings.add(
+          'HISTORY_ROWS_REJECTED: не распознано '
+          '${historyExtraction.rejectedRows} строк истории.',
+        );
+      }
       final dates = transactions.map((item) => item.date).toList()..sort();
       final finalPage = await detector.inspect(browser);
       final snapshot = SberSyncSnapshot(
@@ -171,6 +184,8 @@ class SberConnector extends Stream<SberSyncReport> {
         historyRewardRows: historyExtraction.rewardRows,
         historyServiceRows: historyExtraction.serviceRows,
         historyLoyaltyRewards: historyExtraction.loyaltyRewards,
+        historyRangeBoundaryReached: historyExtraction.rangeBoundaryReached,
+        historyHasMoreRows: historyExtraction.hasMoreRows,
       );
       if (accounts.isEmpty) {
         warnings.add(

@@ -35,7 +35,15 @@ class LocalQestoRepository extends QestoRepository {
     final source = await store.readString(_financialDataKey);
     if (source == null) return emptyUserFinancialData;
     try {
-      return codec.decode(source);
+      final restored = codec.decode(source);
+      final now = DateTime.now();
+      // referenceDate is the application's "today", not part of the user's
+      // financial history. Persisting it verbatim made analytics remain on the
+      // day/month of the previous launch while newly synced operations were
+      // correctly stored with their real dates.
+      return restored.copyWith(
+        referenceDate: DateTime(now.year, now.month, now.day),
+      );
     } on FormatException {
       return emptyUserFinancialData;
     } on TypeError {

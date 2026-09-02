@@ -462,7 +462,8 @@ class _OverviewVisuals extends StatelessWidget {
             children: [
               const DesktopSectionHeader(
                 title: 'Карта расходов',
-                subtitle: 'Источники → общий поток → направления → операции',
+                subtitle:
+                    'Доходы → расходы → операции · зелёный поток — оставшаяся часть дохода',
               ),
               const SizedBox(height: 8),
               if (data.flow case final flow?)

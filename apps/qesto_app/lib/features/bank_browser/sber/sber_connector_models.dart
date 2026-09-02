@@ -136,6 +136,8 @@ class SberTransactionExtraction {
     this.rewardRows = 0,
     this.serviceRows = 0,
     this.loyaltyRewards = 0,
+    this.rangeBoundaryReached = false,
+    this.hasMoreRows = false,
   });
 
   final List<SberTransactionFact> transactions;
@@ -146,6 +148,8 @@ class SberTransactionExtraction {
   final int rewardRows;
   final int serviceRows;
   final int loyaltyRewards;
+  final bool rangeBoundaryReached;
+  final bool hasMoreRows;
 }
 
 class SberSyncSnapshot {
@@ -165,6 +169,8 @@ class SberSyncSnapshot {
     this.historyRewardRows = 0,
     this.historyServiceRows = 0,
     this.historyLoyaltyRewards = 0,
+    this.historyRangeBoundaryReached = false,
+    this.historyHasMoreRows = false,
   });
 
   final DateTime observedAt;
@@ -182,6 +188,8 @@ class SberSyncSnapshot {
   final int historyRewardRows;
   final int historyServiceRows;
   final int historyLoyaltyRewards;
+  final bool historyRangeBoundaryReached;
+  final bool historyHasMoreRows;
 }
 
 class SberSyncReport {
@@ -209,6 +217,7 @@ class SberImportSummary {
     required this.unchangedCount,
     required this.accountsFound,
     required this.accountsUpdated,
+    this.accountsMerged = 0,
     this.accounts = const [],
     this.transactions = const [],
     this.recategorizedCount = 0,
@@ -220,6 +229,7 @@ class SberImportSummary {
   final int unchangedCount;
   final int accountsFound;
   final int accountsUpdated;
+  final int accountsMerged;
   final List<SberAccountImportItem> accounts;
   final List<SberTransactionImportItem> transactions;
   final int recategorizedCount;

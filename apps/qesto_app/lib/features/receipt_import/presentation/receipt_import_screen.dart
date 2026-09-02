@@ -8,6 +8,7 @@ import '../../../core/widgets/qesto_card.dart';
 import '../../../data/models/qesto_models.dart';
 import '../../budget/category_picker.dart';
 import '../../budget/state/budget_controller.dart';
+import '../../transaction_import/services/transaction_category_resolver.dart';
 import '../data/receipt_scanner_service.dart';
 import '../domain/receipt_models.dart';
 import '../services/receipt_ocr_parser.dart';
@@ -43,7 +44,9 @@ class _ReceiptImportScreenState extends State<ReceiptImportScreen> {
   var _updatingExistingReceipt = false;
   String? _error;
   String? _selectedTransactionId;
+  String? _selectedAccountId;
   BudgetCategory? _selectedCategory;
+  var _categoryManuallySelected = false;
   ParsedFiscalReceipt? _receipt;
   ParsedReceiptDocument? _document;
   List<BudgetTransaction> _matches = const [];
@@ -98,6 +101,7 @@ class _ReceiptImportScreenState extends State<ReceiptImportScreen> {
         _createNew = matches.isEmpty;
         _updatingExistingReceipt = importedTransaction != null;
         _selectedCategory = category;
+        _categoryManuallySelected = false;
         _document = null;
       });
     } on PlatformException catch (error) {
@@ -149,6 +153,7 @@ class _ReceiptImportScreenState extends State<ReceiptImportScreen> {
       _selectedTransactionId = matches.firstOrNull?.id;
       _createNew = matches.isEmpty;
       _selectedCategory = category;
+      _categoryManuallySelected = false;
       _document = null;
     });
   }
@@ -176,9 +181,15 @@ class _ReceiptImportScreenState extends State<ReceiptImportScreen> {
           merchant.isNotEmpty) {
         _merchantController.text = merchant;
       }
+      final resolvedCategory = merchant == null
+          ? null
+          : _categoryForMerchant(merchant);
       setState(() {
         _documentLoading = false;
         _document = document;
+        if (!_categoryManuallySelected && resolvedCategory != null) {
+          _selectedCategory = resolvedCategory;
+        }
       });
     } on PlatformException catch (error) {
       _showDocumentError(error.message ?? 'Не удалось распознать бумажный чек');
@@ -218,7 +229,10 @@ class _ReceiptImportScreenState extends State<ReceiptImportScreen> {
           .toList(),
     );
     if (category != null && mounted) {
-      setState(() => _selectedCategory = category);
+      setState(() {
+        _selectedCategory = category;
+        _categoryManuallySelected = true;
+      });
     }
   }
 
@@ -269,15 +283,21 @@ class _ReceiptImportScreenState extends State<ReceiptImportScreen> {
       return;
     }
 
-    final category = _selectedCategory;
+    final enteredMerchant = _merchantController.text.trim();
+    final category = _categoryManuallySelected
+        ? _selectedCategory
+        : _categoryForMerchant(enteredMerchant) ?? _selectedCategory;
     if (category == null) {
       _showError('Выберите категорию операции');
       return;
     }
     final period = widget.controller.periodForOrCreate(receipt.purchasedAt);
     final account = widget.controller.accounts.firstWhere(
-      (item) => item.type != AccountType.liability,
-      orElse: () => widget.controller.accounts.first,
+      (item) => item.id == _selectedAccountId,
+      orElse: () => widget.controller.accounts.firstWhere(
+        (item) => item.type != AccountType.liability,
+        orElse: () => widget.controller.accounts.first,
+      ),
     );
     final merchant = _merchantController.text.trim();
     final title = merchant.isEmpty ? 'Кассовый чек' : merchant;
@@ -310,6 +330,14 @@ class _ReceiptImportScreenState extends State<ReceiptImportScreen> {
           ? 'Возврат из чека добавлен'
           : 'Расход из чека добавлен',
     );
+  }
+
+  BudgetCategory? _categoryForMerchant(String merchant) {
+    if (merchant.trim().isEmpty) return null;
+    final resolved = const TransactionCategoryResolver().resolve(merchant);
+    return widget.controller.categories
+        .where((category) => category.id == resolved.categoryId)
+        .firstOrNull;
   }
 
   TransactionReceiptDetails _buildReceiptDetails(ParsedFiscalReceipt receipt) {
@@ -682,10 +710,13 @@ class _ReceiptImportScreenState extends State<ReceiptImportScreen> {
 
   Widget _buildNewTransactionFields(BuildContext context) {
     final category = _selectedCategory;
-    final account = widget.controller.accounts.firstWhere(
-      (item) => item.type != AccountType.liability,
-      orElse: () => widget.controller.accounts.first,
-    );
+    final accounts = widget.controller.accounts
+        .where((item) => item.type != AccountType.liability)
+        .toList(growable: false);
+    final selectedAccountId =
+        accounts.any((account) => account.id == _selectedAccountId)
+        ? _selectedAccountId
+        : accounts.firstOrNull?.id;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -728,10 +759,20 @@ class _ReceiptImportScreenState extends State<ReceiptImportScreen> {
             ],
           ),
         ),
-        const SizedBox(height: 8),
-        Text(
-          'Счёт: ${account.title}',
-          style: Theme.of(context).textTheme.bodySmall,
+        const SizedBox(height: 10),
+        DropdownButtonFormField<String>(
+          key: const Key('receipt-account-field'),
+          initialValue: selectedAccountId,
+          decoration: const InputDecoration(
+            labelText: 'Счёт',
+            prefixIcon: Icon(Icons.account_balance_wallet_outlined),
+            border: OutlineInputBorder(),
+          ),
+          items: [
+            for (final account in accounts)
+              DropdownMenuItem(value: account.id, child: Text(account.title)),
+          ],
+          onChanged: (value) => setState(() => _selectedAccountId = value),
         ),
       ],
     );

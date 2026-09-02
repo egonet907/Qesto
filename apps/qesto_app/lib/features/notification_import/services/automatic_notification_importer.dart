@@ -1,6 +1,8 @@
 import '../../budget/state/budget_controller.dart';
 import '../../../data/models/qesto_models.dart';
+import '../../transaction_import/services/transaction_account_resolver.dart';
 import '../data/notification_capture_service.dart';
+import '../domain/parsed_bank_transaction.dart';
 import 'bank_notification_parser.dart';
 
 class AutomaticNotificationImportResult {
@@ -34,11 +36,13 @@ class AutomaticNotificationImporter {
     required this.controller,
     this.captureService = const NotificationCaptureService(),
     this.parser = const SberbankNotificationParser(),
+    this.accountResolver = const TransactionAccountResolver(),
   });
 
   final BudgetController controller;
   final NotificationCaptureGateway captureService;
   final BankNotificationParser parser;
+  final TransactionAccountResolver accountResolver;
 
   Future<AutomaticNotificationImportResult>? _activeDrain;
   var _rerunRequested = false;
@@ -101,21 +105,38 @@ class AutomaticNotificationImporter {
 
       try {
         final period = controller.periodForOrCreate(transaction.date);
-        final account = controller.accounts.firstWhere(
-          (item) => item.type != AccountType.liability,
-          orElse: () => controller.accounts.first,
+        final account = accountResolver.resolve(
+          accounts: controller.accounts,
+          accountHint: transaction.accountHint,
+          bankHint: transaction.bankHint,
         );
-        final outcome = await controller.addAndroidNotificationExpense(
+        if (account == null) {
+          // Keep the encrypted inbox record: once the user links or creates
+          // the correct account, the next passive drain can finish safely.
+          failed += 1;
+          continue;
+        }
+        final type = switch (transaction.kind) {
+          ParsedBankTransactionKind.expense => TransactionType.expense,
+          ParsedBankTransactionKind.income => TransactionType.income,
+          ParsedBankTransactionKind.transfer => TransactionType.transfer,
+          ParsedBankTransactionKind.refund => TransactionType.refund,
+        };
+        final outcome = await controller.addNotificationTransaction(
           period: period,
           amountMinor: transaction.amountMinor,
+          currency: transaction.currency,
           date: transaction.date,
+          type: type,
           categoryId: transaction.categoryId,
-          accountId: account.id,
+          accountId: account.accountId,
           title: transaction.merchant,
           notificationKey: notification.notificationKey,
           packageName: notification.packageName,
-          rawNotification: '${notification.title}\n${notification.text}',
+          rawNotification: notification.fullText,
+          sender: notification.title,
           subcategoryId: transaction.subcategoryId,
+          isSmsNotification: transaction.isSmsNotification,
           confidence: transaction.confidence,
         );
         created += outcome.createdTransactionIds.length;

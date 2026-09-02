@@ -165,6 +165,57 @@ void main() {
     expect(transactions.single.description, 'Оплата товаров и услуг');
   });
 
+  test('account fallback identity does not depend on a changing balance', () {
+    final first = extractors.normalizeAccountRows([
+      {
+        'id': '',
+        'name': 'Накопительный счёт',
+        'kind': 'account',
+        'text': 'Накопительный счёт Баланс 1 000 ₽',
+        'balance': '1 000 ₽',
+        'cards': <String>[],
+      },
+    ]).single;
+    final second = extractors.normalizeAccountRows([
+      {
+        'id': '',
+        'name': 'Накопительный счёт',
+        'kind': 'account',
+        'text': 'Накопительный счёт Баланс 7 500 ₽',
+        'balance': '7 500 ₽',
+        'cards': <String>[],
+      },
+    ]).single;
+
+    expect(second.id, first.id);
+    expect(second.balance, 7500);
+  });
+
+  test('linked card and its payment account become one capital account', () {
+    final accounts = extractors.normalizeAccountRows([
+      {
+        'id': 'payment-account-route',
+        'name': 'Платёжный счёт',
+        'kind': 'account',
+        'text': 'Платёжный счёт Баланс 10 000 ₽',
+        'balance': '10 000 ₽',
+        'cards': <String>['1234'],
+      },
+      {
+        'id': 'card-route',
+        'name': 'СберКарта',
+        'kind': 'card',
+        'text': 'СберКарта •• 1234 10 000 ₽',
+        'balance': '10 000 ₽',
+        'cards': <String>[],
+      },
+    ]);
+
+    expect(accounts, hasLength(1));
+    expect(accounts.single.linkedCardLastFours, contains('1234'));
+    expect(accounts.single.balance, 10000);
+  });
+
   test(
     'history scrolling stops as soon as an older date is observed',
     () async {
@@ -202,6 +253,233 @@ void main() {
       expect(browser.scrollAttempts, 0);
     },
   );
+
+  test('history walks virtualized rows before clicking load more', () async {
+    final browser = _LoadMoreBeforeScrollBrowser(
+      firstPayload: jsonEncode([
+        row(
+          id: 'newest',
+          date: '2026-08-29T12:00:00',
+          amount: 500,
+          amountText: '500 ₽',
+          text: 'Магазин 500 ₽ Оплата товаров и услуг',
+          merchant: 'Магазин',
+          operationType: 'Оплата товаров и услуг',
+        ),
+      ]),
+      middlePayload: jsonEncode([
+        row(
+          id: 'next-day',
+          date: '2026-08-20T12:00:00',
+          amount: 700,
+          amountText: '700 ₽',
+          text: 'Аптека 700 ₽ Оплата товаров и услуг',
+          merchant: 'Аптека',
+          operationType: 'Оплата товаров и услуг',
+        ),
+      ]),
+      expandedPayload: jsonEncode([
+        row(
+          id: 'range-boundary',
+          date: '2026-07-31T12:00:00',
+          amount: 200,
+          amountText: '200 ₽',
+          text: 'Кафе 200 ₽ Оплата товаров и услуг',
+          merchant: 'Кафе',
+          operationType: 'Оплата товаров и услуг',
+        ),
+      ]),
+    );
+
+    final result = await extractors.transactions(
+      browser,
+      range: range,
+      maxScrolls: 10,
+    );
+
+    expect(result.transactions, hasLength(2));
+    expect(result.loadMoreClicks, 1);
+    expect(browser.scrollAttempts, 2);
+  });
+
+  test('virtual-list ordinal changes do not create duplicate operations', () {
+    final first = row(
+      id: '',
+      date: '2026-08-20T12:00:00',
+      amount: 700,
+      amountText: '700 ₽',
+      text: 'Аптека 700 ₽ Оплата товаров и услуг',
+      merchant: 'Аптека',
+      operationType: 'Оплата товаров и услуг',
+    );
+    first['observationKey'] =
+        '/app/payments/sbp?documentId=stable-provider-document';
+    final recycled = Map<String, dynamic>.from(first)..['ordinal'] = 17;
+
+    final result = extractors.normalizeTransactionRows([
+      first,
+      recycled,
+    ], range: range);
+
+    expect(result, hasLength(1));
+    expect(result.single.sourceId, isNotEmpty);
+  });
+
+  test(
+    'browser script supports Cyrillic operation groups and strict month dates',
+    () async {
+      final browser = _ScriptCaptureBrowser();
+
+      await extractors.visibleTransactions(browser, range: range);
+
+      final script = browser.transactionScript;
+      expect(script, isNotNull);
+      expect(script, contains('operationGroupLink'));
+      expect(script, contains('section ul[aria-label] li > a[href]'));
+      expect(script, contains('/app/payments/sbp'));
+      expect(script, isNot(contains('[aria-label*="операци" i]')));
+      expect(script, contains('январ[ья]'));
+      expect(
+        script!.indexOf('const labelledGroup'),
+        lessThan(script.indexOf('const own')),
+      );
+    },
+  );
+
+  test('SBP ticket purchase remains a monetary external outflow', () {
+    final transactions = extractors.normalizeTransactionRows([
+      row(
+        id: '0007-ticket-purchase',
+        date: '2026-08-13T00:00:00',
+        amount: 26358,
+        amountText: '26 358 ₽',
+        text:
+            'KUPIBILET.RU город Санкт-Петербург RUS 26 358 ₽ '
+            'Оплата по QR-коду СБП',
+        merchant: 'KUPIBILET.RU город Санкт-Петербург RUS',
+        operationType: 'Оплата по QR-коду СБП',
+      ),
+    ], range: range);
+
+    expect(transactions, hasLength(1));
+    expect(transactions.single.amount, 26358);
+    expect(transactions.single.direction, SberTransactionDirection.outflow);
+    expect(transactions.single.isTransfer, isTrue);
+    expect(transactions.single.isInternalTransfer, isFalse);
+  });
+
+  test(
+    'reports an incomplete range when pagination is still present',
+    () async {
+      final browser = _IncompleteHistoryBrowser(
+        jsonEncode([
+          row(
+            id: 'newest',
+            date: '2026-08-29T12:00:00',
+            amount: 500,
+            amountText: '500 ₽',
+            text: 'Магазин 500 ₽ Оплата товаров и услуг',
+            merchant: 'Магазин',
+            operationType: 'Оплата товаров и услуг',
+          ),
+        ]),
+      );
+
+      final result = await extractors.transactions(
+        browser,
+        range: range,
+        maxScrolls: 1,
+      );
+
+      expect(result.transactions, hasLength(1));
+      expect(result.rangeBoundaryReached, isFalse);
+      expect(result.hasMoreRows, isTrue);
+    },
+  );
+
+  test('history waits for and follows every load-more page', () async {
+    final browser = _MultiPageLoadMoreBrowser([
+      jsonEncode([
+        row(
+          id: 'newest',
+          date: '2026-08-29T12:00:00',
+          amount: 500,
+          amountText: '500 ₽',
+          text: 'Магазин 500 ₽ Оплата товаров и услуг',
+          merchant: 'Магазин',
+          operationType: 'Оплата товаров и услуг',
+        ),
+      ]),
+      jsonEncode([
+        row(
+          id: 'newest',
+          date: '2026-08-29T12:00:00',
+          amount: 500,
+          amountText: '500 ₽',
+          text: 'Магазин 500 ₽ Оплата товаров и услуг',
+          merchant: 'Магазин',
+          operationType: 'Оплата товаров и услуг',
+        ),
+        row(
+          id: 'middle',
+          date: '2026-08-18T12:00:00',
+          amount: 700,
+          amountText: '700 ₽',
+          text: 'Аптека 700 ₽ Оплата товаров и услуг',
+          merchant: 'Аптека',
+          operationType: 'Оплата товаров и услуг',
+        ),
+      ]),
+      jsonEncode([
+        row(
+          id: 'newest',
+          date: '2026-08-29T12:00:00',
+          amount: 500,
+          amountText: '500 ₽',
+          text: 'Магазин 500 ₽ Оплата товаров и услуг',
+          merchant: 'Магазин',
+          operationType: 'Оплата товаров и услуг',
+        ),
+        row(
+          id: 'middle',
+          date: '2026-08-18T12:00:00',
+          amount: 700,
+          amountText: '700 ₽',
+          text: 'Аптека 700 ₽ Оплата товаров и услуг',
+          merchant: 'Аптека',
+          operationType: 'Оплата товаров и услуг',
+        ),
+        row(
+          id: 'oldest-inside',
+          date: '2026-08-02T12:00:00',
+          amount: 300,
+          amountText: '300 ₽',
+          text: 'Кафе 300 ₽ Оплата товаров и услуг',
+          merchant: 'Кафе',
+          operationType: 'Оплата товаров и услуг',
+        ),
+        row(
+          id: 'range-boundary',
+          date: '2026-07-31T12:00:00',
+          amount: 200,
+          amountText: '200 ₽',
+          text: 'Метро 200 ₽ Оплата товаров и услуг',
+          merchant: 'Метро',
+          operationType: 'Оплата товаров и услуг',
+        ),
+      ]),
+    ]);
+
+    final result = await extractors.transactions(
+      browser,
+      range: range,
+      maxScrolls: 20,
+    );
+
+    expect(result.transactions, hasLength(3));
+    expect(result.loadMoreClicks, 2);
+    expect(browser.scrollAttempts, 2);
+  });
 }
 
 class _HistoryBoundaryBrowser extends BrowserController {
@@ -236,6 +514,174 @@ class _HistoryBoundaryBrowser extends BrowserController {
     if (script.contains('advance a visible read-only history list')) {
       scrollAttempts += 1;
       return '1';
+    }
+    return '0';
+  }
+}
+
+class _ScriptCaptureBrowser extends BrowserController {
+  _ScriptCaptureBrowser()
+    : super(
+        profile: BankProfile(
+          id: 'sber-script-capture-profile',
+          bankId: 'sber',
+          displayName: 'Сбер',
+          createdAt: DateTime(2026),
+          lastOpenedAt: DateTime(2026),
+          lastKnownUrl: Uri.parse('https://online.sberbank.ru/app/operations'),
+        ),
+        bank: BankConnectorRegistry.sber,
+        profileManager: BrowserProfileManager(),
+        onNotice: (_) {},
+      );
+
+  String? transactionScript;
+
+  @override
+  Future<dynamic> evaluateConnectorJavascript(
+    String script, {
+    BrowserMode mode = BrowserMode.read,
+  }) async {
+    if (script.contains('visible transaction facts')) {
+      transactionScript = script;
+      return '[]';
+    }
+    return '0';
+  }
+}
+
+class _IncompleteHistoryBrowser extends BrowserController {
+  _IncompleteHistoryBrowser(this.payload)
+    : super(
+        profile: BankProfile(
+          id: 'sber-incomplete-profile',
+          bankId: 'sber',
+          displayName: 'Сбер',
+          createdAt: DateTime(2026),
+          lastOpenedAt: DateTime(2026),
+          lastKnownUrl: Uri.parse('https://online.sberbank.ru/app/operations'),
+        ),
+        bank: BankConnectorRegistry.sber,
+        profileManager: BrowserProfileManager(),
+        onNotice: (_) {},
+      );
+
+  final String payload;
+
+  @override
+  Future<dynamic> evaluateConnectorJavascript(
+    String script, {
+    BrowserMode mode = BrowserMode.read,
+  }) async {
+    if (script.contains('visible transaction facts')) return payload;
+    if (script.contains('detect remaining read-only history pagination')) {
+      return '1';
+    }
+    return '0';
+  }
+}
+
+class _LoadMoreBeforeScrollBrowser extends BrowserController {
+  _LoadMoreBeforeScrollBrowser({
+    required this.firstPayload,
+    required this.middlePayload,
+    required this.expandedPayload,
+  }) : super(
+         profile: BankProfile(
+           id: 'sber-load-more-profile',
+           bankId: 'sber',
+           displayName: 'Сбер',
+           createdAt: DateTime(2026),
+           lastOpenedAt: DateTime(2026),
+           lastKnownUrl: Uri.parse('https://online.sberbank.ru/app/operations'),
+         ),
+         bank: BankConnectorRegistry.sber,
+         profileManager: BrowserProfileManager(),
+         onNotice: (_) {},
+       );
+
+  final String firstPayload;
+  final String middlePayload;
+  final String expandedPayload;
+  var historyReads = 0;
+  var loadMoreAttempts = 0;
+  var scrollAttempts = 0;
+  var walkedMiddle = false;
+  var expanded = false;
+
+  @override
+  Future<dynamic> evaluateConnectorJavascript(
+    String script, {
+    BrowserMode mode = BrowserMode.read,
+  }) async {
+    if (script.contains('visible transaction facts')) {
+      historyReads += 1;
+      if (expanded) return expandedPayload;
+      return walkedMiddle ? middlePayload : firstPayload;
+    }
+    if (script.contains('expand only the read-only operation history')) {
+      loadMoreAttempts += 1;
+      if (loadMoreAttempts != 1) return '0';
+      expanded = true;
+      return '1';
+    }
+    if (script.contains('advance a visible read-only history list')) {
+      scrollAttempts += 1;
+      if (walkedMiddle) return '0';
+      walkedMiddle = true;
+      return '1';
+    }
+    return '0';
+  }
+}
+
+class _MultiPageLoadMoreBrowser extends BrowserController {
+  _MultiPageLoadMoreBrowser(this.pages)
+    : super(
+        profile: BankProfile(
+          id: 'sber-multi-page-profile',
+          bankId: 'sber',
+          displayName: 'Сбер',
+          createdAt: DateTime(2026),
+          lastOpenedAt: DateTime(2026),
+          lastKnownUrl: Uri.parse('https://online.sberbank.ru/app/operations'),
+        ),
+        bank: BankConnectorRegistry.sber,
+        profileManager: BrowserProfileManager(),
+        onNotice: (_) {},
+      );
+
+  final List<String> pages;
+  var currentPage = 0;
+  var loadMoreClicks = 0;
+  var scrollAttempts = 0;
+  var _pendingReads = 0;
+
+  @override
+  Future<dynamic> evaluateConnectorJavascript(
+    String script, {
+    BrowserMode mode = BrowserMode.read,
+  }) async {
+    if (script.contains('visible transaction facts')) {
+      if (_pendingReads > 0) {
+        _pendingReads -= 1;
+        if (_pendingReads == 0 && currentPage < pages.length - 1) {
+          currentPage += 1;
+        }
+      }
+      return pages[currentPage];
+    }
+    if (script.contains('expand only the read-only operation history')) {
+      if (currentPage >= pages.length - 1 || _pendingReads > 0) return '0';
+      loadMoreClicks += 1;
+      // Model React/virtual-list latency: several reads still expose the old
+      // page after a successful button click.
+      _pendingReads = 3;
+      return '1';
+    }
+    if (script.contains('advance a visible read-only history list')) {
+      scrollAttempts += 1;
+      return '0';
     }
     return '0';
   }

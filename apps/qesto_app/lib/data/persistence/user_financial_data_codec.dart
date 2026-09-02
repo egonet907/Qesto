@@ -6,13 +6,16 @@ import '../../synoball/core/models.dart';
 class UserFinancialDataCodec {
   const UserFinancialDataCodec();
 
-  static const schemaVersion = 3;
+  static const schemaVersion = 4;
 
   String encode(UserFinancialData data) => jsonEncode({
     'schemaVersion': schemaVersion,
     'user': _userToJson(data.user),
     'referenceDate': data.referenceDate.toIso8601String(),
     'accounts': data.accounts.map(_accountToJson).toList(),
+    'accountPreferences': data.accountPreferences
+        .map(_accountPreferencesToJson)
+        .toList(),
     'budgetPeriods': data.budgetPeriods.map(_periodToJson).toList(),
     'categoryBudgets': data.categoryBudgets.map(_categoryBudgetToJson).toList(),
     'categoryCustomizations': data.categoryCustomizations
@@ -41,6 +44,9 @@ class UserFinancialDataCodec {
       accounts: _list(
         root['accounts'],
       ).map((item) => _accountFromJson(_map(item))).toList(),
+      accountPreferences: _list(
+        root['accountPreferences'],
+      ).map((item) => _accountPreferencesFromJson(_map(item))).toList(),
       budgetPeriods: _list(
         root['budgetPeriods'],
       ).map((item) => _periodFromJson(_map(item))).toList(),
@@ -107,6 +113,34 @@ QestoAccount _accountFromJson(Map<String, dynamic> json) => QestoAccount(
   balance: json['balance'] as int,
   currency: json['currency'] as String,
   type: AccountType.values.byName(json['type'] as String),
+);
+
+Map<String, dynamic> _accountPreferencesToJson(QestoAccountPreferences value) =>
+    {
+      'accountId': value.accountId,
+      'role': value.role.name,
+      'includeInTotal': value.includeInTotal,
+      'includeInNetWorth': value.includeInNetWorth,
+      'includeInEmergencyFund': value.includeInEmergencyFund,
+      'isVisible': value.isVisible,
+      'includeTransactionsInAnalytics': value.includeTransactionsInAnalytics,
+      'isClosed': value.isClosed,
+    };
+
+QestoAccountPreferences _accountPreferencesFromJson(
+  Map<String, dynamic> json,
+) => QestoAccountPreferences(
+  accountId: json['accountId'] as String,
+  role: QestoAccountRole.values.byName(
+    json['role'] as String? ?? QestoAccountRole.other.name,
+  ),
+  includeInTotal: json['includeInTotal'] as bool? ?? true,
+  includeInNetWorth: json['includeInNetWorth'] as bool? ?? true,
+  includeInEmergencyFund: json['includeInEmergencyFund'] as bool? ?? false,
+  isVisible: json['isVisible'] as bool? ?? true,
+  includeTransactionsInAnalytics:
+      json['includeTransactionsInAnalytics'] as bool? ?? true,
+  isClosed: json['isClosed'] as bool? ?? false,
 );
 
 Map<String, dynamic> _periodToJson(BudgetPeriod value) => {

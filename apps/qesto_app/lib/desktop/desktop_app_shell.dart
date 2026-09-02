@@ -7,6 +7,7 @@ import '../core/theme/qesto_theme.dart';
 import '../data/models/qesto_models.dart';
 import '../features/budget/add_expense_screen.dart';
 import '../features/budget/state/budget_controller.dart';
+import '../features/bank_screenshot_import/presentation/bank_screenshot_import_screen.dart';
 import '../features/notification_import/presentation/notification_import_screen.dart';
 import '../features/receipt_import/presentation/receipt_import_screen.dart';
 import '../features/statement_import/data/bank_statement_file_models.dart';
@@ -129,13 +130,34 @@ class _DesktopAppShellState extends State<DesktopAppShell> {
     );
   }
 
-  BudgetPeriod get _dashboardPeriod => widget.controller.periods.firstWhere(
-    (item) => item.id == _dashboardPeriodId,
-    orElse: () => widget.controller.periods.firstWhere(
+  BudgetPeriod get _dashboardPeriod {
+    if (_dashboardPeriodId case final selectedId?) {
+      return widget.controller.periods.firstWhere(
+        (item) => item.id == selectedId,
+        orElse: () => widget.controller.periods.last,
+      );
+    }
+
+    final active = widget.controller.periods.firstWhere(
       (item) => item.contains(widget.controller.referenceDate),
       orElse: () => widget.controller.periods.last,
-    ),
-  );
+    );
+    if (widget.controller.transactionsFor(active).isNotEmpty ||
+        widget.controller.transactions.isEmpty) {
+      return active;
+    }
+
+    // On the first days of a month a 30-day bank sync mostly contains the
+    // previous month. Do not present an empty Overview while those canonical
+    // operations are already visible in the Transactions table.
+    final newestTransaction = widget.controller.transactions.reduce(
+      (left, right) => left.date.isAfter(right.date) ? left : right,
+    );
+    return widget.controller.periods.firstWhere(
+      (item) => item.contains(newestTransaction.date),
+      orElse: () => active,
+    );
+  }
 
   String? get _periodLabel => switch (_destination) {
     DesktopDestination.dashboard => capitalize(
@@ -316,6 +338,18 @@ class _DesktopAppShellState extends State<DesktopAppShell> {
             builder: (_) => ReceiptImportScreen(controller: widget.controller),
           ),
         );
+      case _AddDataAction.screenshot:
+        final message = await Navigator.of(context).push<String>(
+          MaterialPageRoute<String>(
+            builder: (_) =>
+                BankScreenshotImportScreen(controller: widget.controller),
+          ),
+        );
+        if (message != null && mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(message)));
+        }
       case _AddDataAction.statement:
         await Navigator.of(context).push<void>(
           MaterialPageRoute<void>(
@@ -394,7 +428,15 @@ class _DesktopAppShellState extends State<DesktopAppShell> {
   }
 }
 
-enum _AddDataAction { manual, voice, receipt, statement, excel, account }
+enum _AddDataAction {
+  manual,
+  voice,
+  receipt,
+  screenshot,
+  statement,
+  excel,
+  account,
+}
 
 class _AddDataDialog extends StatelessWidget {
   const _AddDataDialog();
@@ -423,6 +465,12 @@ class _AddDataDialog extends StatelessWidget {
             icon: Icons.receipt_long_outlined,
             title: 'Чек',
             subtitle: 'Изображение или QR',
+          ),
+          _AddDataTile(
+            action: _AddDataAction.screenshot,
+            icon: Icons.screenshot_monitor_outlined,
+            title: 'Скриншоты банка',
+            subtitle: 'OCR и проверка операций перед импортом',
           ),
           _AddDataTile(
             action: _AddDataAction.statement,

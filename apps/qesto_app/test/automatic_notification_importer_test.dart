@@ -2,7 +2,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:qesto/features/budget/state/budget_controller.dart';
 import 'package:qesto/features/notification_import/data/notification_capture_service.dart';
 import 'package:qesto/features/notification_import/services/automatic_notification_importer.dart';
+import 'package:qesto/data/models/qesto_models.dart';
 import 'package:qesto/mocks/fixtures/budget_categories.dart';
+import 'package:qesto/synoball/synoball.dart';
 
 import 'fixtures/sample_user_financial_data.dart';
 
@@ -79,6 +81,38 @@ void main() {
     );
     expect(evidence, hasLength(1));
   });
+
+  test(
+    'banking SMS is marked as SMS evidence and income affects cash flow',
+    () async {
+      final budget = controller();
+      final capture = _FakeCaptureService([
+        CapturedNotification(
+          packageName: 'com.google.android.apps.messaging',
+          notificationKey: 'sms-income',
+          postedAt: DateTime(2026, 8, 13, 14, 32),
+          title: '900',
+          text: 'Перевод от Анны 5 000 ₽. Карта *1234. Баланс 15 000 ₽',
+        ),
+      ]);
+
+      final result = await AutomaticNotificationImporter(
+        controller: budget,
+        captureService: capture,
+      ).drain();
+
+      expect(result.created, 1);
+      final imported = budget.transactions.firstWhere(
+        (transaction) => transaction.title == 'Анны',
+        orElse: () => budget.transactions.last,
+      );
+      expect(imported.type, TransactionType.income);
+      expect(
+        budget.synoballState.evidence.last.sourceType,
+        SynoballSourceType.smsNotification,
+      );
+    },
+  );
 }
 
 class _FakeCaptureService implements NotificationCaptureGateway {

@@ -38,6 +38,7 @@ void main() {
 
   SberSyncSnapshot snapshot({
     String merchant = 'Scooters',
+    String fingerprint = 'stable-fingerprint',
     bool isIncome = false,
     bool isTransfer = false,
     bool isInternalTransfer = false,
@@ -56,7 +57,7 @@ void main() {
         merchant: merchant,
         operationType: 'Оплата товаров и услуг',
         status: status,
-        fingerprint: 'stable-fingerprint',
+        fingerprint: fingerprint,
         isIncome: isIncome,
         isTransfer: isTransfer,
         isInternalTransfer: isInternalTransfer,
@@ -83,6 +84,71 @@ void main() {
       expect(result.recategorizedCount, 1);
     },
   );
+
+  test(
+    'provider id upgrade replaces an ordinal id without a duplicate',
+    () async {
+      final legacy =
+          existing(
+            tags: const ['sberbank', 'sber-live', qestoAutoCategoryTag],
+          ).copyWith(
+            merchant: 'Scooters',
+            title: 'Scooters',
+            description: 'Scooters · Оплата товаров и услуг',
+          );
+      final controller = controllerWith(legacy);
+      final upgraded = snapshot(fingerprint: 'provider-document-id');
+
+      final first = await controller.importSberSnapshot(upgraded);
+      final second = await controller.importSberSnapshot(upgraded);
+
+      expect(controller.transactions, hasLength(1));
+      expect(controller.transactions.single.id, legacy.id);
+      expect(first.newCount, 0);
+      expect(second.newCount, 0);
+    },
+  );
+
+  test(
+    'stored automatic Sber categories use the current adapter vocabulary',
+    () {
+      final controller = controllerWith(
+        existing(tags: const ['sberbank', qestoAutoCategoryTag]).copyWith(
+          merchant: 'KUPIBILET.RU город Санкт-Петербург RUS',
+          title: 'KUPIBILET.RU город Санкт-Петербург RUS',
+          description: 'Оплата по QR-коду СБП',
+        ),
+      );
+
+      expect(controller.transactions.single.categoryId, 'travel');
+      expect(controller.transactions.single.classificationConfidence, 0.94);
+    },
+  );
+
+  test('stored person transfer cannot remain marked as internal', () {
+    final controller = controllerWith(
+      existing(tags: const ['sberbank', qestoInternalTransferTag]).copyWith(
+        type: TransactionType.transfer,
+        title: 'Дмитрий Аркадьевич Л.',
+        description: 'Перевод по СБП Дмитрию Аркадьевичу Л.',
+        transferDirection: TransferDirection.outgoing,
+      ),
+    );
+
+    final transaction = controller.transactions.single;
+    expect(transaction.type, TransactionType.expense);
+    expect(transaction.tags, contains(qestoExternalTransferTag));
+    expect(transaction.tags, isNot(contains(qestoInternalTransferTag)));
+    expect(
+      controller
+          .cashFlowForRange(
+            from: DateTime(2026, 8),
+            toExclusive: DateTime(2026, 9),
+          )
+          .externalOutflows,
+      83,
+    );
+  });
 
   test('manual category override survives adapter refresh', () async {
     final manual = existing(
@@ -167,6 +233,92 @@ void main() {
       expect(outgoing.tags, contains(qestoExternalTransferTag));
       expect(internal.type, TransactionType.transfer);
       expect(internal.tags, contains(qestoInternalTransferTag));
+    },
+  );
+
+  test(
+    'sync merges a linked card duplicate without losing operations',
+    () async {
+      const mainAccount = QestoAccount(
+        id: 'sber-account-main',
+        userId: 'user',
+        title: 'Платёжный счёт · карта •• 1234',
+        balance: 10000,
+        currency: 'RUB',
+        type: AccountType.bankCard,
+      );
+      const cardDuplicate = QestoAccount(
+        id: 'sber-account-card',
+        userId: 'user',
+        title: 'СберКарта •• 1234',
+        balance: 10000,
+        currency: 'RUB',
+        type: AccountType.bankCard,
+      );
+      final controller = BudgetController(
+        configuration: budgetConfiguration,
+        financialData: UserFinancialData(
+          user: const QestoUser(
+            id: 'user',
+            name: 'Пользователь',
+            defaultCurrency: 'RUB',
+          ),
+          referenceDate: DateTime(2026, 8, 31),
+          accounts: const [mainAccount, cardDuplicate],
+          transactions: [
+            BudgetTransaction(
+              id: 'old-main-operation',
+              userId: 'user',
+              accountId: mainAccount.id,
+              date: DateTime(2026, 8, 20),
+              amount: 500,
+              currency: 'RUB',
+              type: TransactionType.expense,
+              categoryId: 'other',
+              merchant: 'Магазин 1',
+            ),
+            BudgetTransaction(
+              id: 'old-card-operation',
+              userId: 'user',
+              accountId: cardDuplicate.id,
+              date: DateTime(2026, 8, 21),
+              amount: 700,
+              currency: 'RUB',
+              type: TransactionType.expense,
+              categoryId: 'other',
+              merchant: 'Магазин 2',
+            ),
+          ],
+        ),
+      );
+      final result = await controller.importSberSnapshot(
+        SberSyncSnapshot(
+          observedAt: DateTime(2026, 8, 31),
+          accounts: const [
+            SberAccountFact(
+              id: 'sber-account-new-route',
+              name: 'Платёжный счёт',
+              type: AccountType.bankCard,
+              currency: 'RUB',
+              balance: 10000,
+              linkedCardLastFours: ['1234'],
+            ),
+          ],
+          transactions: const [],
+          oldestTransaction: null,
+          newestTransaction: null,
+          pendingCount: 0,
+          pageType: SberPageType.accounts,
+        ),
+      );
+
+      expect(result.accountsMerged, 1);
+      expect(controller.accounts, hasLength(1));
+      expect(controller.accounts.single.balance, 10000);
+      expect(controller.transactions.map((item) => item.accountId).toSet(), {
+        controller.accounts.single.id,
+      });
+      expect(controller.transactions, hasLength(2));
     },
   );
 }

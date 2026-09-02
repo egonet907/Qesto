@@ -10,11 +10,30 @@ class SberExtractors {
   Future<List<SberAccountFact>> accounts(BrowserController browser) async {
     final raw = await browser.evaluateConnectorJavascript(_accountsScript);
     if (raw is! String) return const [];
-    final rows = _decodeRows(raw);
-    return rows
+    return normalizeAccountRows(_decodeRows(raw));
+  }
+
+  List<SberAccountFact> normalizeAccountRows(
+    Iterable<Map<String, dynamic>> rows,
+  ) {
+    final normalized = rows
         .map(_accountFromRow)
         .whereType<SberAccountFact>()
         .toList(growable: false);
+    final result = <SberAccountFact>[];
+    for (final incoming in normalized) {
+      final index = result.indexWhere(
+        (existing) =>
+            existing.id == incoming.id ||
+            _accountsAreDirectlyLinked(existing, incoming),
+      );
+      if (index < 0) {
+        result.add(incoming);
+      } else {
+        result[index] = _mergeAccountFacts(result[index], incoming);
+      }
+    }
+    return result;
   }
 
   Future<void> hydratePage(
@@ -49,20 +68,19 @@ class SberExtractors {
     final rewardFingerprints = <String>{};
     final serviceFingerprints = <String>{};
     final loyaltyFingerprints = <String>{};
-    var previousCount = -1;
+    var previousRawCount = -1;
     var stagnantLoadMoreAttempts = 0;
-    var lastActionWasLoadMore = false;
     var scrollSteps = 0;
     var loadMoreClicks = 0;
     var reachedRangeStart = false;
+    var stationaryEndAttempts = 0;
     for (var index = 0; index < maxScrolls; index++) {
       final raw = await browser.evaluateConnectorJavascript(
         _transactionsScript,
       );
       if (raw is String) {
         for (final row in _decodeRows(raw)) {
-          final rawFingerprint =
-              '${row['id']}|${row['date']}|${row['amount']}|${row['text']}|${row['ordinal']}';
+          final rawFingerprint = _rawRowFingerprint(row);
           rawFingerprints.add(rawFingerprint);
           final observedDate = _rowDate(row);
           if (observedDate != null && observedDate.isBefore(range.from)) {
@@ -83,33 +101,64 @@ class SberExtractors {
           }
         }
       }
-      final grew = byFingerprint.length > previousCount;
-      if (lastActionWasLoadMore) {
-        stagnantLoadMoreAttempts = grew ? 0 : stagnantLoadMoreAttempts + 1;
+      final grew = rawFingerprints.length > previousRawCount;
+      if (grew) {
+        stationaryEndAttempts = 0;
+        stagnantLoadMoreAttempts = 0;
       }
-      previousCount = byFingerprint.length;
+      previousRawCount = rawFingerprints.length;
       if (reachedRangeStart) break;
+
+      // Walk the rendered history in small, overlapping steps. Sber
+      // virtualizes this list: jumping straight to the last row or to an
+      // off-screen "Показать ещё" button unmounts intermediate operations
+      // before the extractor can observe them.
       final moved = await browser.evaluateConnectorJavascript(_scrollScript);
       if (moved is String && moved == '1') {
         scrollSteps += 1;
-        lastActionWasLoadMore = false;
+        stationaryEndAttempts = 0;
         // Sber lazy-renders the next portion of the operation history. A short
         // delay races that render and used to make the connector stop after
         // the first few rows.
         await Future<void>.delayed(const Duration(milliseconds: 1500));
         continue;
       }
+
+      // Pagination is safe only after the incremental walk reaches the end
+      // of the currently rendered page. The JS side clicks only a rendered,
+      // enabled read-only history control and never a financial action.
+      if (stagnantLoadMoreAttempts < 3) {
+        final loadedMore = await browser
+            .evaluateConnectorJavascript(_loadMoreTransactionsScript)
+            .timeout(const Duration(seconds: 5), onTimeout: () => null);
+        if (loadedMore == '1') {
+          loadMoreClicks += 1;
+          stationaryEndAttempts = 0;
+          final advanced = await _waitForHistoryAdvance(
+            browser,
+            knownRawFingerprints: rawFingerprints,
+          );
+          if (advanced) {
+            stagnantLoadMoreAttempts = 0;
+            continue;
+          }
+          stagnantLoadMoreAttempts += 1;
+        }
+      }
       if (stagnantLoadMoreAttempts >= 3) break;
-      final loadedMore = await browser
-          .evaluateConnectorJavascript(_loadMoreTransactionsScript)
-          .timeout(const Duration(seconds: 5), onTimeout: () => null);
-      if (loadedMore is! String || loadedMore != '1') break;
-      loadMoreClicks += 1;
-      lastActionWasLoadMore = true;
-      await Future<void>.delayed(const Duration(milliseconds: 1800));
+
+      // A virtualized list can report the same scroll position while a new
+      // page is still being mounted. Require several stable observations
+      // before declaring the selected period exhausted.
+      stationaryEndAttempts += 1;
+      if (stationaryEndAttempts >= 3) break;
+      await Future<void>.delayed(const Duration(milliseconds: 1200));
     }
     final result = byFingerprint.values.toList()
       ..sort((a, b) => b.date.compareTo(a.date));
+    final hasMore = await browser
+        .evaluateConnectorJavascript(_hasMoreTransactionsScript)
+        .timeout(const Duration(seconds: 5), onTimeout: () => null);
     return SberTransactionExtraction(
       transactions: result,
       rawRowsSeen: rawFingerprints.length,
@@ -119,7 +168,27 @@ class SberExtractors {
       rewardRows: rewardFingerprints.length,
       serviceRows: serviceFingerprints.length,
       loyaltyRewards: loyaltyFingerprints.length,
+      rangeBoundaryReached: reachedRangeStart,
+      hasMoreRows: hasMore == '1',
     );
+  }
+
+  Future<bool> _waitForHistoryAdvance(
+    BrowserController browser, {
+    required Set<String> knownRawFingerprints,
+  }) async {
+    for (var attempt = 0; attempt < 10; attempt++) {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      final raw = await browser
+          .evaluateConnectorJavascript(_transactionsScript)
+          .timeout(const Duration(seconds: 5), onTimeout: () => null);
+      if (raw is! String) continue;
+      for (final row in _decodeRows(raw)) {
+        final fingerprint = _rawRowFingerprint(row);
+        if (!knownRawFingerprints.contains(fingerprint)) return true;
+      }
+    }
+    return false;
   }
 
   Future<List<SberTransactionFact>> visibleTransactions(
@@ -159,14 +228,20 @@ class SberExtractors {
     }
   }
 
+  static String _rawRowFingerprint(Map<String, dynamic> row) {
+    final sourceId = _clean(row['id'] as String?);
+    if (sourceId.isNotEmpty) return 'id:$sourceId';
+    final observationKey = _clean(row['observationKey'] as String?);
+    if (observationKey.isNotEmpty) return 'observation:$observationKey';
+    // Ordinals are deliberately excluded. They change whenever Sber recycles
+    // virtual-list nodes and previously made the same operation look new.
+    return 'fact:${row['dateIso'] ?? row['date']}|${row['amountValue'] ?? row['amount']}|${row['text']}|${row['account']}';
+  }
+
   SberAccountFact? _accountFromRow(Map<String, dynamic> row) {
     final text = _clean(row['text'] as String?);
     final balance = _money(row['balance'] as String? ?? text);
     if (balance == null || text.isEmpty) return null;
-    final rawId = _clean(row['id'] as String?);
-    final id = rawId.isEmpty
-        ? _stableId('account', text)
-        : _stableId('account', rawId);
     final lower = '${row['kind'] ?? ''} $text'.toLowerCase();
     final type = lower.contains('вклад') || lower.contains('депозит')
         ? AccountType.deposit
@@ -187,23 +262,78 @@ class SberExtractors {
           r'\b(?:сч[её]т|карта)\D{0,24}(\d{4})\b',
           caseSensitive: false,
         ).firstMatch(text)?.group(1);
-    final linkedCards = (row['cards'] as List? ?? const [])
-        .map((value) => _clean(value?.toString()))
-        .where((value) => RegExp(r'^\d{4}$').hasMatch(value))
-        .toSet()
-        .toList(growable: false);
+    final linkedCards =
+        (row['cards'] as List? ?? const [])
+            .map((value) => _clean(value?.toString()))
+            .where((value) => RegExp(r'^\d{4}$').hasMatch(value))
+            .toSet()
+            .toList(growable: false)
+          ..sort();
+    final rawName = _clean(row['name'] as String?);
+    final name = rawName.isEmpty ? _title(text) : rawName;
+    final currency = _currency(text);
+    final rawId = _clean(row['id'] as String?);
+    final stableIdentity = rawId.isNotEmpty
+        ? 'external:$rawId'
+        : maskedLastFour != null
+        ? 'suffix:$maskedLastFour'
+        : linkedCards.isNotEmpty
+        ? 'linked:${linkedCards.join(',')}'
+        : 'name:${_accountIdentityName(name)}|${type.name}|$currency';
+    final id = _stableId('account', stableIdentity);
     return SberAccountFact(
       id: id,
-      name: _clean(row['name'] as String?).isEmpty
-          ? _title(text)
-          : _clean(row['name'] as String?),
+      name: name,
       type: type,
-      currency: _currency(text),
+      currency: currency,
       balance: balance,
       availableBalance: _money(row['available'] as String? ?? ''),
       lastFour: maskedLastFour,
       linkedCardLastFours: linkedCards,
       isLiability: type == AccountType.liability,
+    );
+  }
+
+  static bool _accountsAreDirectlyLinked(
+    SberAccountFact left,
+    SberAccountFact right,
+  ) {
+    if (left.currency != right.currency) return false;
+    final leftSuffixes = <String>{
+      if (left.lastFour != null) left.lastFour!,
+      ...left.linkedCardLastFours,
+    };
+    final rightSuffixes = <String>{
+      if (right.lastFour != null) right.lastFour!,
+      ...right.linkedCardLastFours,
+    };
+    if (leftSuffixes.intersection(rightSuffixes).isEmpty) return false;
+    return left.linkedCardLastFours.isNotEmpty ||
+        right.linkedCardLastFours.isNotEmpty ||
+        left.id == right.id;
+  }
+
+  static SberAccountFact _mergeAccountFacts(
+    SberAccountFact primary,
+    SberAccountFact incoming,
+  ) {
+    final cards = <String>{
+      ...primary.linkedCardLastFours,
+      ...incoming.linkedCardLastFours,
+      if (primary.lastFour != null) primary.lastFour!,
+      if (incoming.lastFour != null) incoming.lastFour!,
+    }.toList(growable: false)..sort();
+    final preferIncoming = incoming.name.length > primary.name.length;
+    return SberAccountFact(
+      id: primary.id,
+      name: preferIncoming ? incoming.name : primary.name,
+      type: primary.type == AccountType.cash ? incoming.type : primary.type,
+      currency: primary.currency,
+      balance: incoming.balance,
+      availableBalance: incoming.availableBalance ?? primary.availableBalance,
+      lastFour: primary.lastFour ?? incoming.lastFour,
+      linkedCardLastFours: cards,
+      isLiability: primary.isLiability || incoming.isLiability,
     );
   }
 
@@ -262,15 +392,10 @@ class SberExtractors {
         ? 'REFUND'
         : 'POSTED';
     final sourceId = _clean(row['id'] as String?);
-    final ordinal = switch (row['ordinal']) {
-      final int value => value.toString(),
-      final num value => value.toInt().toString(),
-      final String value => value,
-      _ => '',
-    };
+    final observationKey = _clean(row['observationKey'] as String?);
     final fingerprint = _stableId(
       'transaction',
-      '$sourceId|$date|$amount|$text|${sourceId.isEmpty ? ordinal : ''}',
+      '$sourceId|$date|$amount|$text|${sourceId.isEmpty ? observationKey : ''}',
     );
     final rawMerchant = _clean(row['merchant'] as String?);
     final merchant = _merchantCandidate(rawMerchant);
@@ -336,6 +461,14 @@ class SberExtractors {
 
   static String _clean(String? value) =>
       (value ?? '').replaceAll(RegExp(r'\s+'), ' ').trim();
+
+  static String _accountIdentityName(String value) => _clean(
+    value
+        .toLowerCase()
+        .replaceAll(RegExp(r'(?:\*{2,}|x{2,}|•{2,})\s*\d{4}'), ' ')
+        .replaceAll(RegExp(r'\b(?:баланс|остаток|доступно)\b.*'), ' ')
+        .replaceAll(RegExp(r'[^a-zа-яё0-9]+'), ' '),
+  );
 
   static String _accountId(String? value) {
     final source = _clean(value);
@@ -541,7 +674,11 @@ const _transactionsScript = r'''(() => {
   const signedNumber = /[+\u2212-]\s*\d[\d\s]*(?:[,\.]\d{1,2})?/;
   const labelledReward = /\d[\d\s]*(?:[,\.]\d{1,2})?\s*(?:спасибо|бонус(?:а|ов|ы)?|балл(?:а|ов|ы)?)/i;
   const service = /(?:получить|сформировать|заказать|скачать)?\s*(?:выписк|справк|документ)/i;
-  const datePattern = /\d{1,2}[.\-/]\d{1,2}(?:[.\-/]\d{2,4})?|\d{1,2}\s+[а-яё]{3,}(?:\s+\d{4})?|сегодня|вчера|позавчера/i;
+  // Restrict textual dates to real Russian month names. The previous generic
+  // `number + word` branch treated a loyalty reward such as
+  // "+12,45 Московский транспорт" as the impossible date "45 Московский"
+  // and discarded the otherwise valid monetary operation.
+  const datePattern = /(?:0?[1-9]|[12]\d|3[01])[.\-/](?:0?[1-9]|1[0-2])(?:[.\-/]\d{2,4})?|(?:0?[1-9]|[12]\d|3[01])\s+(?:январ[ья]|феврал[ья]|марта?|апрел[ья]|ма[йя]|июн[ья]|июл[ья]|августа?|сентябр[ья]|октябр[ья]|ноябр[ья]|декабр[ья])(?:\s+\d{4})?|сегодня|вчера|позавчера/i;
   const amountValue = (raw) => {
     const normalized = clean(raw).replace(/[\u00a0\u202f]/g, ' ').replace(/\u2212/g, '-');
     const match = normalized.match(/([+-]?\d[\d ]*)(?:[,\.]([0-9]{1,2}))?/);
@@ -581,8 +718,11 @@ const _transactionsScript = r'''(() => {
     return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}T${two(date.getHours())}:${two(date.getMinutes())}:00`;
   };
   const groupedDate = (node) => {
-    const own = clean(node.innerText).match(datePattern)?.[0] || '';
-    if (own) return own;
+    // The aria label of the enclosing day group is authoritative. Inspect it
+    // before row text because rows can start with a signed loyalty amount.
+    const labelledGroup = node.closest('ul[aria-label],ol[aria-label]');
+    const labelledDate = clean(labelledGroup?.getAttribute('aria-label') || '').match(datePattern)?.[0] || '';
+    if (labelledDate) return labelledDate;
     const section = node.closest('section');
     if (section) {
       for (const child of Array.from(section.children)) {
@@ -591,6 +731,8 @@ const _transactionsScript = r'''(() => {
         if (value) return value;
       }
     }
+    const own = clean(node.innerText).match(datePattern)?.[0] || '';
+    if (own) return own;
     let branch = node;
     for (let depth = 0; branch && depth < 5; depth++, branch = branch.parentElement) {
       let sibling = branch.previousElementSibling;
@@ -636,7 +778,16 @@ const _transactionsScript = r'''(() => {
   };
   const fallbackSelectors = 'tr,[role="row"],[data-testid*="transaction" i],[data-testid*="operation" i],[data-test*="transaction" i],[data-test*="operation" i],[class*="transaction" i],[class*="operation" i],#HISTORY a[href]';
   const rows = [];
-  const operationLinks = Array.from(document.querySelectorAll('a[href*="/app/operations/details"]')).filter(visible);
+  const operationGroupLink = (node) => {
+    const group = node.closest('ul[aria-label],ol[aria-label]');
+    return /операци/i.test(clean(group?.getAttribute('aria-label') || ''));
+  };
+  // CSS attribute-selector flag `i` is ASCII-only in Chromium. It did not
+  // match Sber's capitalized Cyrillic aria-label "Операции ...", so links on
+  // alternative routes (notably /app/payments/sbp) disappeared completely.
+  const operationLinks = Array.from(new Set(document.querySelectorAll(
+    'section ul[aria-label] li > a[href],section ol[aria-label] li > a[href],a[href*="/app/operations/details"],a[href*="/app/transfers/sberhub"],a[href*="/app/payments/sbp"]'
+  ))).filter((node) => operationGroupLink(node) || /\/app\/(?:operations\/details|transfers\/sberhub|payments\/sbp)/i.test(node.getAttribute('href') || '')).filter(visible);
   const candidates = operationLinks.length > 0
     ? operationLinks
     : Array.from(document.querySelectorAll(fallbackSelectors)).filter(visible);
@@ -678,8 +829,15 @@ const _transactionsScript = r'''(() => {
     const serviceRow = service.test(operationType || text);
     if (!text || !date || (!amount && !rewardAmount && !serviceRow)) return;
     const attrs = (name) => node.getAttribute(name) || original.getAttribute(name) || '';
-    const detail = (original.getAttribute('href') || '').split('?')[0];
-    const detailId = (detail.match(/\/details\/([^/]+)$/i) || [])[1] || '';
+    const detail = original.getAttribute('href') || '';
+    let detailUrl = null;
+    try { detailUrl = new URL(detail, window.location.href); } catch (_) {}
+    const detailPathId = ((detailUrl?.pathname || detail.split('?')[0]).match(/\/details\/([^/]+)$/i) || [])[1] || '';
+    const detailId = detailUrl?.searchParams.get('uohId') ||
+      detailUrl?.searchParams.get('srcDocumentId') ||
+      detailUrl?.searchParams.get('documentId') ||
+      detailUrl?.searchParams.get('operationId') ||
+      detailUrl?.searchParams.get('transactionId') || detailPathId;
     let account = attrs('data-account-id') || attrs('data-account') || '';
     const accountLink = node.querySelector('a[href*="/app/cta/details/"]');
     if (!account && accountLink) account = (accountLink.getAttribute('href') || '').split('/').pop() || '';
@@ -695,6 +853,7 @@ const _transactionsScript = r'''(() => {
       date,
       amountValue: amountValue(amount),
       dateIso: dateIso(date, text),
+      observationKey: detail || [date, amount, merchant, operationType, account].join('|'),
       ordinal,
       nonCashKind: !amount && rewardAmount ? 'reward' : !amount && serviceRow ? 'service' : '',
       reward: rewardAmount,
@@ -708,14 +867,44 @@ const _transactionsScript = r'''(() => {
 
 const _scrollScript = r'''(() => {
   /* QESTO_SBER_READ_V1: advance a visible read-only history list. */
-  const amount = Math.max(window.innerHeight * 0.8, 520);
-  const candidates = [document.scrollingElement, ...Array.from(document.querySelectorAll('*'))]
-    .filter((node) => node && node.scrollHeight > node.clientHeight + 24 && getComputedStyle(node).overflowY !== 'hidden')
-    .sort((left, right) => (right.scrollHeight - right.clientHeight) - (left.scrollHeight - left.clientHeight));
-  const target = candidates[0] || document.scrollingElement;
+  const amount = Math.max(Math.min(window.innerHeight * 0.32, 340), 220);
+  const rowSelector = 'section ul[aria-label] li > a[href],section ol[aria-label] li > a[href],a[href*="/app/operations/details"],a[href*="/app/transfers/sberhub"],a[href*="/app/payments/sbp"]';
+  const rows = Array.from(document.querySelectorAll(rowSelector)).filter((node) => {
+    const group = node.closest('ul[aria-label],ol[aria-label]');
+    return /операци/i.test(String(group?.getAttribute('aria-label') || '')) ||
+      /\/app\/(?:operations\/details|transfers\/sberhub|payments\/sbp)/i.test(node.getAttribute('href') || '');
+  });
+  const last = rows.length > 0 ? rows[rows.length - 1] : null;
+  const targets = [];
+  const addScrollableAncestors = (start) => {
+    let parent = start?.parentElement || null;
+    while (parent) {
+      const style = getComputedStyle(parent);
+      if (parent.scrollHeight > parent.clientHeight + 24 &&
+          /(auto|scroll|overlay)/i.test(style.overflowY)) {
+        targets.push(parent);
+      }
+      parent = parent.parentElement;
+    }
+  };
+  addScrollableAncestors(last);
+  const loadMore = Array.from(document.querySelectorAll('button,[role="button"]'))
+    .find((node) => /^(?:(?:показать|загрузить|открыть)\s+(?:ещ[её]|больше)|ещ[её]\s+операци)[^\n]{0,40}$/i
+      .test(String(node.innerText || node.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim()));
+  addScrollableAncestors(loadMore);
+  if (document.scrollingElement) targets.push(document.scrollingElement);
+  const uniqueTargets = Array.from(new Set(targets));
+  const target = uniqueTargets.find((candidate) => {
+    const style = getComputedStyle(candidate);
+    const maximum = Math.max(0, candidate.scrollHeight - candidate.clientHeight);
+    return maximum > candidate.scrollTop + 1 &&
+      (candidate === document.scrollingElement || /(auto|scroll|overlay)/i.test(style.overflowY));
+  });
   if (!target) return '0';
   const before = target.scrollTop;
-  target.scrollTop = Math.min(target.scrollTop + amount, target.scrollHeight);
+  const maximum = Math.max(0, target.scrollHeight - target.clientHeight);
+  target.scrollTop = Math.min(before + amount, maximum);
+  target.dispatchEvent(new Event('scroll', {bubbles: true}));
   return String(target.scrollTop > before ? 1 : 0);
 })()''';
 
@@ -730,10 +919,35 @@ const _loadMoreTransactionsScript = r'''(() => {
   };
   const matches = Array.from(document.querySelectorAll('button,[role="button"]'))
     .filter(visible)
-    .filter((node) => /^(?:показать|загрузить)\s+ещ[её](?:\s+операци[ий])?$/i.test(clean(node.innerText || node.getAttribute('aria-label'))));
-  if (matches.length !== 1) return '0';
-  matches[0].click();
+    .filter((node) => /^(?:(?:показать|загрузить|открыть)\s+(?:ещ[её]|больше)|ещ[её]\s+операци)[^\n]{0,40}$/i.test(clean(node.innerText || node.getAttribute('aria-label'))));
+  if (matches.length === 0) return '0';
+  const operationRows = Array.from(document.querySelectorAll(
+    'section ul[aria-label] li > a[href],section ol[aria-label] li > a[href],a[href*="/app/operations/details"],a[href*="/app/transfers/sberhub"],a[href*="/app/payments/sbp"]'
+  )).filter((node) => {
+    const group = node.closest('ul[aria-label],ol[aria-label]');
+    return /операци/i.test(String(group?.getAttribute('aria-label') || '')) ||
+      /\/app\/(?:operations\/details|transfers\/sberhub|payments\/sbp)/i.test(node.getAttribute('href') || '');
+  });
+  const lastRow = operationRows.length > 0 ? operationRows[operationRows.length - 1] : null;
+  if (lastRow) {
+    const rowBottom = lastRow.getBoundingClientRect().bottom;
+    matches.sort((left, right) =>
+      Math.abs(left.getBoundingClientRect().top - rowBottom) -
+      Math.abs(right.getBoundingClientRect().top - rowBottom));
+  }
+  const button = matches[0];
+  button.click();
   return '1';
+})()''';
+
+const _hasMoreTransactionsScript = r'''(() => {
+  /* QESTO_SBER_READ_V1: detect remaining read-only history pagination. */
+  const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+  const matches = Array.from(document.querySelectorAll('button,[role="button"]'))
+    .filter((node) => !node.disabled)
+    .some((node) => /^(?:(?:показать|загрузить|открыть)\s+(?:ещ[её]|больше)|ещ[её]\s+операци)[^\n]{0,40}$/i
+      .test(clean(node.innerText || node.getAttribute('aria-label'))));
+  return String(matches ? 1 : 0);
 })()''';
 
 const _hydrationScrollScript = r'''(() => {

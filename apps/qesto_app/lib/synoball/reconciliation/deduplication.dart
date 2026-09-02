@@ -140,7 +140,9 @@ class TransactionDeduplicator {
         .abs();
     final hasDateOnlySource =
         incomingSource == SynoballSourceType.statement ||
-        existingSources.contains(SynoballSourceType.statement);
+        incomingSource == SynoballSourceType.bankScreenshot ||
+        existingSources.contains(SynoballSourceType.statement) ||
+        existingSources.contains(SynoballSourceType.bankScreenshot);
     final allowedMinutes = hasDateOnlySource ? 48 * 60 : 24 * 60;
     if (minutes > allowedMinutes) return null;
 
