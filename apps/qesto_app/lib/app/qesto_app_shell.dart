@@ -46,7 +46,7 @@ class _QestoAppShellState extends State<QestoAppShell>
   late final AutomaticNotificationImporter _automaticNotificationImporter;
   StreamSubscription<void>? _notificationEvents;
 
-  static const _titles = ['Бюджет', 'Выгода', 'Накопления'];
+  static const _titles = ['Бюджет', 'Выгода', 'Капитал'];
 
   @override
   void initState() {

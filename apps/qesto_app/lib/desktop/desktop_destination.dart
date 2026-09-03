@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 enum DesktopProductSection {
   budget('Бюджет', Icons.donut_large_rounded, Color(0xFF3478F6)),
   benefits('Выгода', Icons.local_offer_outlined, Color(0xFFFF9F43)),
-  savings('Накопления', Icons.savings_outlined, Color(0xFF8D63F6));
+  capital('Капитал', Icons.account_balance_wallet_outlined, Color(0xFF8D63F6));
 
   const DesktopProductSection(this.label, this.icon, this.color);
 
@@ -14,7 +14,7 @@ enum DesktopProductSection {
   DesktopDestination get landing => switch (this) {
     DesktopProductSection.budget => DesktopDestination.expenses,
     DesktopProductSection.benefits => DesktopDestination.benefits,
-    DesktopProductSection.savings => DesktopDestination.goals,
+    DesktopProductSection.capital => DesktopDestination.liquidity,
   };
 }
 
@@ -56,8 +56,18 @@ enum DesktopDestination {
     Icons.local_offer_outlined,
     DesktopProductSection.benefits,
   ),
-  goals('Цели', Icons.flag_outlined, DesktopProductSection.savings),
-  capital('Капитал', Icons.show_chart_rounded, DesktopProductSection.savings),
+  liquidity(
+    'Ликвидность',
+    Icons.water_drop_outlined,
+    DesktopProductSection.capital,
+  ),
+  investments(
+    'Инвестиции',
+    Icons.trending_up_rounded,
+    DesktopProductSection.capital,
+  ),
+  debts('Долги', Icons.account_balance_outlined, DesktopProductSection.capital),
+  goals('Цели', Icons.flag_outlined, DesktopProductSection.capital),
   settings('Настройки', Icons.settings_outlined, null);
 
   const DesktopDestination(this.label, this.icon, this.section);

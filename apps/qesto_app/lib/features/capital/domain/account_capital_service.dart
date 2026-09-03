@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import '../../../data/models/qesto_models.dart';
 import '../../budget/services/cash_flow_calculation_service.dart';
+import 'debt_analytics_service.dart';
 import '../../../features/profile/services/cbr_currency_service.dart';
 import '../../../synoball/core/models.dart';
 
@@ -124,6 +125,7 @@ class AccountCapitalSnapshot {
     required this.emergencyFundMonths,
     required this.emergencyGoal,
     required this.reservedCash,
+    required this.debtPaymentsReserved,
     required this.availableCash,
     required this.nextExpectedIncome,
     required this.averageDailyExpenses,
@@ -150,6 +152,7 @@ class AccountCapitalSnapshot {
   final double? emergencyFundMonths;
   final SavingsGoal? emergencyGoal;
   final int reservedCash;
+  final int debtPaymentsReserved;
   final int availableCash;
   final ExpectedIncomeInsight? nextExpectedIncome;
   final int? averageDailyExpenses;
@@ -193,6 +196,8 @@ class AccountCapitalService {
     required List<BudgetTransaction> transactions,
     required List<UpcomingExpense> upcomingExpenses,
     required List<SavingsGoal> savingsGoals,
+    List<GoalAllocation> goalAllocations = const [],
+    List<DebtAccount> debts = const [],
     required SynoballState synoballState,
     required DateTime asOf,
     required CapitalPeriod period,
@@ -374,13 +379,34 @@ class AccountCapitalService {
     );
     final horizon =
         expectedIncome?.date ?? normalizedAsOf.add(const Duration(days: 30));
-    final reserved = _reservedCash(
+    final recurringReserved = _reservedCash(
       upcomingExpenses,
       synoballState.recurringStreams,
       normalizedAsOf,
       horizon,
       converted,
     );
+    final debtPayments = _debtAnalytics.getNextPayments(
+      debts,
+      asOf: normalizedAsOf,
+      days: math.max(0, horizon.difference(normalizedAsOf).inDays),
+    );
+    final debtReserved = debtPayments.fold<int>(
+      0,
+      (sum, item) => sum + (converted(item.amount, item.currency) ?? 0),
+    );
+    final goalReserved = goalAllocations
+        .where(
+          (item) =>
+              item.sourceType == GoalAllocationSourceType.account &&
+              includedIds.contains(item.sourceId),
+        )
+        .fold<int>(
+          0,
+          (sum, item) =>
+              sum + (converted(item.allocatedAmount, item.currency) ?? 0),
+        );
+    final reserved = recurringReserved + debtReserved + goalReserved;
     final dailyExpenses = _averageDailyExpenses(
       transactions,
       normalizedAsOf,
@@ -426,6 +452,7 @@ class AccountCapitalService {
           : emergencyAmount / essentialMonthly,
       emergencyGoal: emergencyGoal,
       reservedCash: reserved,
+      debtPaymentsReserved: debtReserved,
       availableCash: total - reserved,
       nextExpectedIncome: expectedIncome,
       averageDailyExpenses: dailyExpenses,
@@ -848,6 +875,7 @@ class AccountCapitalService {
   );
 
   static const _cashFlow = CashFlowCalculationService();
+  static const _debtAnalytics = DebtAnalyticsService();
 
   DateTime _day(DateTime value) => DateTime(value.year, value.month, value.day);
 

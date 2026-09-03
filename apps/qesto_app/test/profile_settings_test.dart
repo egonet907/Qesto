@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:qesto/data/models/qesto_models.dart';
 import 'package:qesto/features/budget/state/budget_controller.dart';
 import 'package:qesto/mocks/fixtures/budget_categories.dart';
 
@@ -64,6 +65,10 @@ void main() {
     expect(controller.synoballState.transactions.length, synoballBefore);
 
     await controller.deleteSavingsGoal(goal!.id);
-    expect(controller.savingsGoals.any((item) => item.id == goal.id), isFalse);
+    expect(controller.savingsGoals.any((item) => item.id == goal.id), isTrue);
+    expect(
+      controller.savingsGoals.singleWhere((item) => item.id == goal.id).status,
+      GoalStatus.archived,
+    );
   });
 }

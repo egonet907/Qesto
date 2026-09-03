@@ -408,6 +408,7 @@ class BudgetScreenState extends State<BudgetScreen> {
                   children: [
                     Expanded(
                       child: QestoButton(
+                        key: const Key('budget-capital-button'),
                         label: 'Капитал',
                         icon: Icons.account_balance_rounded,
                         style: QestoButtonStyle.secondary,

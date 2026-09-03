@@ -50,12 +50,16 @@ void main() {
     List<QestoAccountPreferences> preferences = const [],
     List<BudgetTransaction> transactions = const [],
     List<SavingsGoal> goals = const [],
+    List<GoalAllocation> goalAllocations = const [],
+    List<DebtAccount> debts = const [],
   }) => service.calculate(
     accounts: accounts,
     accountPreferences: preferences,
     transactions: transactions,
     upcomingExpenses: const [],
     savingsGoals: goals,
+    goalAllocations: goalAllocations,
+    debts: debts,
     synoballState: const SynoballState(),
     asOf: asOf,
     period: CapitalPeriod.oneMonth,
@@ -169,6 +173,58 @@ void main() {
     expect(result.emergencyFundAmount, 0);
     expect(result.emergencyFundMonths, isNull);
   });
+
+  test('known debt payments are reserved from available liquidity', () {
+    final result = calculate(
+      accounts: [account('card', 50000)],
+      debts: [
+        DebtAccount(
+          id: 'loan',
+          userId: 'user-1',
+          name: 'Кредит',
+          type: DebtType.personalLoan,
+          currency: 'RUB',
+          currentBalance: 200000,
+          monthlyPayment: 15000,
+          nextPaymentDate: DateTime(2026, 9, 10),
+          status: DebtStatus.active,
+          source: DebtSource.manual,
+          dataQuality: DebtDataQuality.manual,
+          confidence: 1,
+          createdAt: DateTime(2026),
+          updatedAt: asOf,
+        ),
+      ],
+    );
+
+    expect(result.debtPaymentsReserved, 15000);
+    expect(result.reservedCash, 15000);
+    expect(result.availableCash, 35000);
+  });
+
+  test(
+    'goal allocations reserve liquidity without changing account balance',
+    () {
+      final result = calculate(
+        accounts: [account('savings', 100000, type: AccountType.savings)],
+        goalAllocations: [
+          GoalAllocation(
+            id: 'allocation',
+            goalId: 'goal',
+            sourceType: GoalAllocationSourceType.account,
+            sourceId: 'savings',
+            allocatedAmount: 60000,
+            currency: 'RUB',
+            updatedAt: asOf,
+          ),
+        ],
+      );
+
+      expect(result.totalLiquidAssets, 100000);
+      expect(result.reservedCash, 60000);
+      expect(result.availableCash, 40000);
+    },
+  );
 
   test(
     'emergency fund uses selected accounts and essential spending history',

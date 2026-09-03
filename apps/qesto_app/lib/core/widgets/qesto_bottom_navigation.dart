@@ -15,7 +15,7 @@ class QestoBottomNavigation extends StatelessWidget {
   static const _destinations = <({String label, IconData icon})>[
     (label: 'Бюджет', icon: Icons.pie_chart_rounded),
     (label: 'Выгода', icon: Icons.local_offer_rounded),
-    (label: 'Накопления', icon: Icons.savings_rounded),
+    (label: 'Капитал', icon: Icons.account_balance_wallet_rounded),
   ];
 
   @override

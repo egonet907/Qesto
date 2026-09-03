@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
@@ -83,6 +84,17 @@ class BudgetController extends ChangeNotifier {
        accountPreferences = List.of(financialData.accountPreferences),
        plannedCumulativePoints = List.of(financialData.plannedCumulativePoints),
        savingsGoals = List.of(financialData.savingsGoals),
+       goalAllocations = List.of(financialData.goalAllocations),
+       goalContributions = List.of(financialData.goalContributions),
+       goalHistoryEvents = List.of(financialData.goalHistoryEvents),
+       investmentAccounts = List.of(financialData.investmentAccounts),
+       investmentBalanceSnapshots = List.of(
+         financialData.investmentBalanceSnapshots,
+       ),
+       investmentContributions = List.of(financialData.investmentContributions),
+       debts = List.of(financialData.debts),
+       debtBalanceSnapshots = List.of(financialData.debtBalanceSnapshots),
+       debtPayments = List.of(financialData.debtPayments),
        _upcomingExpenses = List.of(financialData.upcomingExpenses),
        _actions = List.of(financialData.actions) {
     final storedState = financialData.synoballState;
@@ -100,6 +112,63 @@ class BudgetController extends ChangeNotifier {
           ? _resolvedAccounts(financialData)
           : readModel.accounts,
     );
+    if (debts.isEmpty) {
+      for (final account in accounts.where(
+        (item) => item.type == AccountType.liability,
+      )) {
+        debts.add(
+          DebtAccount(
+            id: 'legacy-debt-${account.id}',
+            userId: _userId,
+            name: account.title,
+            type: DebtType.other,
+            currency: account.currency,
+            currentBalance: account.balance.abs(),
+            status: DebtStatus.active,
+            source: DebtSource.calculated,
+            dataQuality: DebtDataQuality.incomplete,
+            confidence: 0.5,
+            createdAt: referenceDate,
+            updatedAt: referenceDate,
+            linkedAccountId: account.id,
+          ),
+        );
+      }
+    }
+    if (investmentAccounts.isEmpty) {
+      for (final account in accounts.where(
+        (item) => item.type == AccountType.investment,
+      )) {
+        final id = 'legacy-investment-${account.id}';
+        investmentAccounts.add(
+          InvestmentAccount(
+            id: id,
+            userId: _userId,
+            linkedAccountId: account.id,
+            name: account.title,
+            type: InvestmentAccountType.other,
+            currency: account.currency,
+            currentBalance: account.balance,
+            status: InvestmentAccountStatus.active,
+            source: InvestmentDataSource.calculated,
+            createdAt: referenceDate,
+            updatedAt: referenceDate,
+            lastBalanceUpdateAt: referenceDate,
+          ),
+        );
+        investmentBalanceSnapshots.add(
+          InvestmentBalanceSnapshot(
+            id: 'legacy-investment-snapshot-${account.id}',
+            investmentAccountId: id,
+            date: referenceDate,
+            balance: account.balance,
+            currency: account.currency,
+            source: InvestmentDataSource.calculated,
+            createdAt: referenceDate,
+          ),
+        );
+      }
+    }
     _transactions = List.of(
       _applySberAdapterCompatibility(readModel.transactions),
     );
@@ -254,6 +323,15 @@ class BudgetController extends ChangeNotifier {
   final List<QestoAccountPreferences> accountPreferences;
   final List<BudgetPlanPoint> plannedCumulativePoints;
   final List<SavingsGoal> savingsGoals;
+  final List<GoalAllocation> goalAllocations;
+  final List<GoalContribution> goalContributions;
+  final List<GoalHistoryEvent> goalHistoryEvents;
+  final List<InvestmentAccount> investmentAccounts;
+  final List<InvestmentBalanceSnapshot> investmentBalanceSnapshots;
+  final List<InvestmentContribution> investmentContributions;
+  final List<DebtAccount> debts;
+  final List<DebtBalanceSnapshot> debtBalanceSnapshots;
+  final List<DebtPayment> debtPayments;
   late final List<QestoAccount> accounts;
   final BudgetCalculationService calculationService;
   final BudgetForecastService forecastService;
@@ -333,6 +411,15 @@ class BudgetController extends ChangeNotifier {
     plannedCumulativePoints: List.of(plannedCumulativePoints),
     actions: List.of(_actions),
     savingsGoals: List.of(savingsGoals),
+    goalAllocations: List.of(goalAllocations),
+    goalContributions: List.of(goalContributions),
+    goalHistoryEvents: List.of(goalHistoryEvents),
+    investmentAccounts: List.of(investmentAccounts),
+    investmentBalanceSnapshots: List.of(investmentBalanceSnapshots),
+    investmentContributions: List.of(investmentContributions),
+    debts: List.of(debts),
+    debtBalanceSnapshots: List.of(debtBalanceSnapshots),
+    debtPayments: List.of(debtPayments),
     trackedProducts: _clearExternalData ? const [] : source.trackedProducts,
     synoballState: _synoball.state,
   );
@@ -1692,6 +1779,15 @@ class BudgetController extends ChangeNotifier {
       ..addAll(_baseCategories);
     plannedCumulativePoints.clear();
     savingsGoals.clear();
+    goalAllocations.clear();
+    goalContributions.clear();
+    goalHistoryEvents.clear();
+    investmentAccounts.clear();
+    investmentBalanceSnapshots.clear();
+    investmentContributions.clear();
+    debts.clear();
+    debtBalanceSnapshots.clear();
+    debtPayments.clear();
     _upcomingExpenses.clear();
     _actions.clear();
     _legacyTransactionIdentities.clear();
@@ -1735,28 +1831,68 @@ class BudgetController extends ChangeNotifier {
     required String title,
     required String category,
     required int targetAmount,
-    required DateTime targetDate,
+    DateTime? targetDate,
     int savedAmount = 0,
     String? currency,
+    int? desiredMonthlyContribution,
+    GoalPriority priority = GoalPriority.medium,
+    GoalStatus status = GoalStatus.active,
+    GoalReminder? reminder,
+    String iconKey = 'flag',
+    GoalType type = GoalType.targetAmount,
+    String? comment,
+    int? colorValue,
   }) async {
     final cleanedTitle = title.trim();
-    if (cleanedTitle.isEmpty || targetAmount <= 0) return null;
+    if (cleanedTitle.isEmpty ||
+        targetAmount < 0 ||
+        (type != GoalType.recurringSaving && targetAmount <= 0) ||
+        (type == GoalType.recurringSaving &&
+            targetAmount == 0 &&
+            (desiredMonthlyContribution ?? 0) <= 0)) {
+      return null;
+    }
+    final normalizedSaved = math.max(0, savedAmount);
+    final resolvedStatus = targetAmount > 0 && normalizedSaved >= targetAmount
+        ? GoalStatus.funded
+        : status;
+    final now = DateTime.now();
     final goal = SavingsGoal(
-      id: 'goal-${DateTime.now().microsecondsSinceEpoch}',
+      id: 'goal-${now.microsecondsSinceEpoch}',
       userId: _userId,
       title: cleanedTitle,
       targetAmount: targetAmount,
-      savedAmount: savedAmount.clamp(0, targetAmount).toInt(),
+      savedAmount: normalizedSaved,
       currency: currency ?? user.defaultCurrency,
       streakWeeks: 0,
-      isActive: savingsGoals.every((item) => !item.isActive),
-      history: savedAmount <= 0
+      isActive: resolvedStatus == GoalStatus.active,
+      history: normalizedSaved <= 0
           ? const []
-          : [SavingsHistoryPoint(date: referenceDate, amount: savedAmount)],
+          : [SavingsHistoryPoint(date: referenceDate, amount: normalizedSaved)],
       category: category.trim().isEmpty ? 'Другое' : category.trim(),
+      type: type,
       targetDate: targetDate,
+      desiredMonthlyContribution: desiredMonthlyContribution,
+      priority: priority,
+      status: resolvedStatus,
+      reminder: reminder,
+      iconKey: iconKey,
+      comment: comment?.trim().isEmpty == true ? null : comment?.trim(),
+      colorValue: colorValue,
+      createdAt: now,
+      fundedAt: resolvedStatus == GoalStatus.funded ? now : null,
     );
     savingsGoals.add(goal);
+    goalHistoryEvents.add(
+      GoalHistoryEvent(
+        id: 'goal-event-${now.microsecondsSinceEpoch}',
+        goalId: goal.id,
+        type: GoalHistoryEventType.created,
+        date: now,
+        description: 'Цель создана',
+        amount: targetAmount > 0 ? targetAmount : null,
+      ),
+    );
     _clearExternalData = false;
     await _changed();
     return goal;
@@ -1764,20 +1900,615 @@ class BudgetController extends ChangeNotifier {
 
   Future<void> updateSavingsGoal(SavingsGoal goal) async {
     final index = savingsGoals.indexWhere((item) => item.id == goal.id);
-    if (index < 0 || goal.title.trim().isEmpty || goal.targetAmount <= 0) {
+    if (index < 0 ||
+        goal.title.trim().isEmpty ||
+        goal.targetAmount < 0 ||
+        (goal.type != GoalType.recurringSaving && goal.targetAmount <= 0)) {
       return;
+    }
+    final previous = savingsGoals[index];
+    final normalizedSaved = math.max(0, goal.savedAmount);
+    final history = List<SavingsHistoryPoint>.of(previous.history);
+    if (previous.savedAmount != normalizedSaved) {
+      history.removeWhere(
+        (item) =>
+            item.date.year == referenceDate.year &&
+            item.date.month == referenceDate.month &&
+            item.date.day == referenceDate.day,
+      );
+      history.add(
+        SavingsHistoryPoint(date: referenceDate, amount: normalizedSaved),
+      );
+      history.sort((left, right) => left.date.compareTo(right.date));
+    }
+    var resolvedStatus = goal.status;
+    DateTime? fundedAt = goal.fundedAt;
+    if (goal.type == GoalType.reserve &&
+        goal.targetAmount > 0 &&
+        normalizedSaved < goal.targetAmount &&
+        resolvedStatus == GoalStatus.funded) {
+      resolvedStatus = GoalStatus.active;
+    } else if (goal.targetAmount > 0 &&
+        normalizedSaved >= goal.targetAmount &&
+        resolvedStatus == GoalStatus.active) {
+      resolvedStatus = GoalStatus.funded;
+      fundedAt ??= DateTime.now();
+    }
+    final now = DateTime.now();
+    if (previous.targetAmount != goal.targetAmount) {
+      goalHistoryEvents.add(
+        GoalHistoryEvent(
+          id: 'goal-event-target-${now.microsecondsSinceEpoch}',
+          goalId: goal.id,
+          type: GoalHistoryEventType.targetChanged,
+          date: now,
+          description: 'Целевая сумма изменена',
+          amount: goal.targetAmount,
+        ),
+      );
+    }
+    if (previous.targetDate != goal.targetDate) {
+      goalHistoryEvents.add(
+        GoalHistoryEvent(
+          id: 'goal-event-date-${now.microsecondsSinceEpoch}',
+          goalId: goal.id,
+          type: GoalHistoryEventType.targetDateChanged,
+          date: now,
+          description: 'Срок цели изменён',
+        ),
+      );
+    }
+    if (previous.status != resolvedStatus) {
+      goalHistoryEvents.add(
+        GoalHistoryEvent(
+          id: 'goal-event-status-${now.microsecondsSinceEpoch}',
+          goalId: goal.id,
+          type: resolvedStatus == GoalStatus.completed
+              ? GoalHistoryEventType.completed
+              : resolvedStatus == GoalStatus.funded
+              ? GoalHistoryEventType.funded
+              : GoalHistoryEventType.statusChanged,
+          date: now,
+          description: 'Статус цели изменён',
+        ),
+      );
     }
     savingsGoals[index] = goal.copyWith(
       title: goal.title.trim(),
-      savedAmount: goal.savedAmount.clamp(0, goal.targetAmount).toInt(),
+      savedAmount: normalizedSaved,
+      history: history,
+      status: resolvedStatus,
+      isActive: resolvedStatus == GoalStatus.active,
+      fundedAt: fundedAt,
+      completedAt: resolvedStatus == GoalStatus.completed
+          ? goal.completedAt ?? now
+          : goal.completedAt,
     );
     await _changed();
   }
 
   Future<void> deleteSavingsGoal(String id) async {
-    final before = savingsGoals.length;
-    savingsGoals.removeWhere((item) => item.id == id);
-    if (savingsGoals.length != before) await _changed();
+    final index = savingsGoals.indexWhere((item) => item.id == id);
+    if (index < 0) return;
+    savingsGoals[index] = savingsGoals[index].copyWith(
+      status: GoalStatus.archived,
+      isActive: false,
+    );
+    await _changed();
+  }
+
+  Future<bool> upsertGoalAllocation(GoalAllocation allocation) async {
+    if (allocation.allocatedAmount < 0 ||
+        !savingsGoals.any((item) => item.id == allocation.goalId)) {
+      return false;
+    }
+    final sourceBalance = _goalAllocationSourceBalance(allocation);
+    if (sourceBalance == null) return false;
+    final allocatedElsewhere = goalAllocations
+        .where(
+          (item) =>
+              item.sourceType == allocation.sourceType &&
+              item.sourceId == allocation.sourceId &&
+              item.id != allocation.id,
+        )
+        .fold<int>(0, (sum, item) => sum + item.allocatedAmount);
+    if (allocatedElsewhere + allocation.allocatedAmount > sourceBalance) {
+      return false;
+    }
+    final index = goalAllocations.indexWhere(
+      (item) => item.id == allocation.id,
+    );
+    if (index < 0) {
+      goalAllocations.add(allocation);
+    } else {
+      goalAllocations[index] = allocation;
+    }
+    final now = DateTime.now();
+    goalHistoryEvents.add(
+      GoalHistoryEvent(
+        id: 'goal-event-allocation-${now.microsecondsSinceEpoch}',
+        goalId: allocation.goalId,
+        type: GoalHistoryEventType.allocationChanged,
+        date: now,
+        description: 'Распределение средств изменено',
+        amount: allocation.allocatedAmount,
+      ),
+    );
+    await _changed();
+    return true;
+  }
+
+  int? _goalAllocationSourceBalance(GoalAllocation allocation) {
+    if (allocation.sourceType == GoalAllocationSourceType.manualAsset) {
+      return allocation.allocatedAmount;
+    }
+    if (allocation.sourceType == GoalAllocationSourceType.account) {
+      final account = accounts
+          .where((item) => item.id == allocation.sourceId)
+          .firstOrNull;
+      if (account == null || account.currency != allocation.currency) {
+        return null;
+      }
+      return math.max(0, account.balance);
+    }
+    final account = investmentAccounts
+        .where((item) => item.id == allocation.sourceId)
+        .firstOrNull;
+    if (account == null || account.currency != allocation.currency) {
+      return null;
+    }
+    return math.max(0, account.currentBalance);
+  }
+
+  Future<void> removeGoalAllocation(String id) async {
+    final allocation = goalAllocations
+        .where((item) => item.id == id)
+        .firstOrNull;
+    if (allocation == null) return;
+    goalAllocations.removeWhere((item) => item.id == id);
+    final now = DateTime.now();
+    goalHistoryEvents.add(
+      GoalHistoryEvent(
+        id: 'goal-event-allocation-remove-${now.microsecondsSinceEpoch}',
+        goalId: allocation.goalId,
+        type: GoalHistoryEventType.allocationChanged,
+        date: now,
+        description: 'Распределение средств удалено',
+      ),
+    );
+    await _changed();
+  }
+
+  Future<GoalContribution?> addGoalContribution({
+    required String goalId,
+    required int amount,
+    required GoalContributionType type,
+    required DateTime date,
+    String? comment,
+    String? transactionId,
+    String? accountId,
+    GoalContributionSource source = GoalContributionSource.manual,
+  }) async {
+    final index = savingsGoals.indexWhere((item) => item.id == goalId);
+    if (index < 0 || amount <= 0) return null;
+    final goal = savingsGoals[index];
+    final now = DateTime.now();
+    final contribution = GoalContribution(
+      id: 'goal-contribution-${now.microsecondsSinceEpoch}',
+      goalId: goalId,
+      date: date,
+      amount: amount,
+      currency: goal.currency,
+      type: type,
+      source: source,
+      createdAt: now,
+      transactionId: transactionId,
+      accountId: accountId,
+      comment: comment?.trim().isEmpty == true ? null : comment?.trim(),
+    );
+    goalContributions.add(contribution);
+    final nextAmount = type == GoalContributionType.contribution
+        ? goal.savedAmount + amount
+        : math.max(0, goal.savedAmount - amount);
+    await updateSavingsGoal(goal.copyWith(savedAmount: nextAmount));
+    return contribution;
+  }
+
+  Future<InvestmentAccount?> addInvestmentAccount({
+    required String name,
+    required int currentBalance,
+    InvestmentAccountType type = InvestmentAccountType.brokerage,
+    String? currency,
+    String? brokerName,
+    DateTime? openedAt,
+    String? comment,
+    bool includeInTotal = true,
+    InvestmentPlan? plan,
+  }) async {
+    final cleanedName = name.trim();
+    if (cleanedName.isEmpty || currentBalance < 0) return null;
+    final now = DateTime.now();
+    final id = 'investment-${now.microsecondsSinceEpoch}';
+    final linkedAccountId = 'investment-account-${now.microsecondsSinceEpoch}';
+    final resolvedCurrency = currency ?? user.defaultCurrency;
+    final investment = InvestmentAccount(
+      id: id,
+      userId: _userId,
+      linkedAccountId: linkedAccountId,
+      name: cleanedName,
+      brokerName: brokerName?.trim().isEmpty == true
+          ? null
+          : brokerName?.trim(),
+      type: type,
+      currency: resolvedCurrency,
+      currentBalance: currentBalance,
+      openedAt: openedAt,
+      comment: comment?.trim().isEmpty == true ? null : comment?.trim(),
+      includeInTotal: includeInTotal,
+      status: InvestmentAccountStatus.active,
+      source: InvestmentDataSource.manual,
+      createdAt: now,
+      updatedAt: now,
+      lastBalanceUpdateAt: now,
+      plan: plan,
+    );
+    _synoball.upsertAccount(
+      SynoballAccount(
+        id: linkedAccountId,
+        entityId: _legacyBridge.entityIdFor(_userId),
+        name: cleanedName,
+        type:
+            type == InvestmentAccountType.brokerage ||
+                type == InvestmentAccountType.iis
+            ? SynoballAccountType.brokerage
+            : SynoballAccountType.investment,
+        currency: resolvedCurrency,
+        balance: Money(
+          minorUnits: currentBalance * 100,
+          currency: resolvedCurrency,
+        ),
+        externalId: id,
+        isVirtual: true,
+      ),
+    );
+    _syncFromSynoball();
+    investmentAccounts.add(investment);
+    _upsertInvestmentSnapshot(investment, currentBalance, now, now);
+    _clearExternalData = false;
+    await _changed();
+    return investment;
+  }
+
+  Future<void> updateInvestmentAccount(InvestmentAccount investment) async {
+    final index = investmentAccounts.indexWhere(
+      (item) => item.id == investment.id,
+    );
+    if (index < 0 ||
+        investment.name.trim().isEmpty ||
+        investment.currentBalance < 0) {
+      return;
+    }
+    final previous = investmentAccounts[index];
+    final now = DateTime.now();
+    final updated = investment.copyWith(
+      name: investment.name.trim(),
+      updatedAt: now,
+      lastBalanceUpdateAt: previous.currentBalance == investment.currentBalance
+          ? previous.lastBalanceUpdateAt
+          : now,
+    );
+    investmentAccounts[index] = updated;
+    _upsertCanonicalInvestmentAccount(updated);
+    _syncFromSynoball();
+    if (previous.currentBalance != updated.currentBalance) {
+      _upsertInvestmentSnapshot(updated, updated.currentBalance, now, now);
+    }
+    await _changed();
+  }
+
+  Future<void> updateInvestmentBalance({
+    required String investmentAccountId,
+    required int balance,
+    required DateTime date,
+  }) async {
+    final index = investmentAccounts.indexWhere(
+      (item) => item.id == investmentAccountId,
+    );
+    if (index < 0 || balance < 0) return;
+    final now = DateTime.now();
+    final updated = investmentAccounts[index].copyWith(
+      currentBalance: balance,
+      updatedAt: now,
+      lastBalanceUpdateAt: date,
+    );
+    investmentAccounts[index] = updated;
+    _upsertCanonicalInvestmentAccount(updated);
+    _syncFromSynoball();
+    _upsertInvestmentSnapshot(updated, balance, date, now);
+    await _changed();
+  }
+
+  Future<InvestmentContribution?> addInvestmentContribution({
+    required String investmentAccountId,
+    required int amount,
+    required InvestmentContributionType type,
+    required DateTime date,
+    String? comment,
+    String? transactionId,
+    bool adjustBalance = false,
+  }) async {
+    final account = investmentAccounts
+        .where((item) => item.id == investmentAccountId)
+        .firstOrNull;
+    if (account == null || amount <= 0) return null;
+    final now = DateTime.now();
+    final contribution = InvestmentContribution(
+      id: 'investment-contribution-${now.microsecondsSinceEpoch}',
+      investmentAccountId: investmentAccountId,
+      transactionId: transactionId,
+      date: date,
+      amount: amount,
+      currency: account.currency,
+      type: type,
+      source: transactionId == null
+          ? InvestmentDataSource.manual
+          : InvestmentDataSource.transaction,
+      createdAt: now,
+      comment: comment?.trim().isEmpty == true ? null : comment?.trim(),
+    );
+    investmentContributions.add(contribution);
+    if (adjustBalance) {
+      final next = type == InvestmentContributionType.contribution
+          ? account.currentBalance + amount
+          : math.max(0, account.currentBalance - amount);
+      await updateInvestmentBalance(
+        investmentAccountId: investmentAccountId,
+        balance: next,
+        date: date,
+      );
+    } else {
+      await _changed();
+    }
+    return contribution;
+  }
+
+  void _upsertCanonicalInvestmentAccount(InvestmentAccount investment) {
+    final canonical = _synoball.state.accounts
+        .where((item) => item.id == investment.linkedAccountId)
+        .firstOrNull;
+    _synoball.upsertAccount(
+      SynoballAccount(
+        id: investment.linkedAccountId,
+        entityId: canonical?.entityId ?? _legacyBridge.entityIdFor(_userId),
+        name: investment.name,
+        type:
+            investment.type == InvestmentAccountType.brokerage ||
+                investment.type == InvestmentAccountType.iis
+            ? SynoballAccountType.brokerage
+            : SynoballAccountType.investment,
+        currency: investment.currency,
+        balance: Money(
+          minorUnits: investment.currentBalance * 100,
+          currency: investment.currency,
+        ),
+        connectionId: canonical?.connectionId,
+        institutionId: investment.institutionId ?? canonical?.institutionId,
+        externalId:
+            investment.externalAccountId ??
+            canonical?.externalId ??
+            investment.id,
+        isVirtual: canonical?.isVirtual ?? true,
+      ),
+    );
+  }
+
+  void _upsertInvestmentSnapshot(
+    InvestmentAccount investment,
+    int balance,
+    DateTime date,
+    DateTime createdAt,
+  ) {
+    final day = DateTime(date.year, date.month, date.day);
+    investmentBalanceSnapshots.removeWhere(
+      (item) =>
+          item.investmentAccountId == investment.id &&
+          item.date.year == day.year &&
+          item.date.month == day.month &&
+          item.date.day == day.day,
+    );
+    investmentBalanceSnapshots.add(
+      InvestmentBalanceSnapshot(
+        id: 'investment-snapshot-${createdAt.microsecondsSinceEpoch}',
+        investmentAccountId: investment.id,
+        date: day,
+        balance: balance,
+        currency: investment.currency,
+        source: investment.source,
+        createdAt: createdAt,
+      ),
+    );
+  }
+
+  Future<DebtAccount?> addDebt({
+    required String name,
+    required int currentBalance,
+    required DebtType type,
+    String? currency,
+    String? institutionName,
+    int? originalPrincipal,
+    double? interestRate,
+    int? monthlyPayment,
+    int? paymentDay,
+    DateTime? nextPaymentDate,
+    DateTime? startDate,
+    DateTime? plannedEndDate,
+    DebtPaymentType paymentType = DebtPaymentType.unknown,
+    CreditCardDebtDetails? creditCardDetails,
+  }) async {
+    final cleanedName = name.trim();
+    if (cleanedName.isEmpty || currentBalance < 0) return null;
+    final now = DateTime.now();
+    final debtId = 'debt-${now.microsecondsSinceEpoch}';
+    final accountId = 'debt-account-${now.microsecondsSinceEpoch}';
+    final resolvedCurrency = currency ?? user.defaultCurrency;
+    final debt = DebtAccount(
+      id: debtId,
+      userId: _userId,
+      name: cleanedName,
+      type: type,
+      currency: resolvedCurrency,
+      currentBalance: currentBalance,
+      status: DebtStatus.active,
+      source: DebtSource.manual,
+      dataQuality: DebtDataQuality.manual,
+      confidence: 1,
+      createdAt: now,
+      updatedAt: now,
+      linkedAccountId: accountId,
+      institutionName: institutionName?.trim().isEmpty == true
+          ? null
+          : institutionName?.trim(),
+      originalPrincipal: originalPrincipal,
+      currentPrincipal: currentBalance,
+      interestRate: interestRate,
+      monthlyPayment: monthlyPayment,
+      paymentDay: paymentDay,
+      nextPaymentDate: nextPaymentDate,
+      startDate: startDate,
+      plannedEndDate: plannedEndDate,
+      paymentType: paymentType,
+      creditCardDetails: creditCardDetails,
+    );
+    _synoball.upsertAccount(
+      SynoballAccount(
+        id: accountId,
+        entityId: _legacyBridge.entityIdFor(_userId),
+        name: cleanedName,
+        type: type == DebtType.creditCard
+            ? SynoballAccountType.credit
+            : SynoballAccountType.loan,
+        currency: resolvedCurrency,
+        balance: Money(
+          minorUnits: currentBalance * 100,
+          currency: resolvedCurrency,
+        ),
+        externalId: debtId,
+        isVirtual: true,
+      ),
+    );
+    _syncFromSynoball();
+    debts.add(debt);
+    debtBalanceSnapshots.add(
+      DebtBalanceSnapshot(
+        id: 'debt-snapshot-${now.microsecondsSinceEpoch}',
+        debtId: debt.id,
+        date: referenceDate,
+        totalBalance: currentBalance,
+        principalBalance: currentBalance,
+        source: DebtSource.manual,
+        confidence: 1,
+      ),
+    );
+    _clearExternalData = false;
+    await _changed();
+    return debt;
+  }
+
+  Future<void> updateDebt(DebtAccount debt) async {
+    final index = debts.indexWhere((item) => item.id == debt.id);
+    if (index < 0 || debt.name.trim().isEmpty || debt.currentBalance < 0) {
+      return;
+    }
+    final previous = debts[index];
+    final accountId = debt.linkedAccountId ?? 'debt-account-${debt.id}';
+    final updated = debt.copyWith(
+      name: debt.name.trim(),
+      updatedAt: DateTime.now(),
+      linkedAccountId: accountId,
+    );
+    debts[index] = updated;
+    final canonical = _synoball.state.accounts
+        .where((item) => item.id == accountId)
+        .firstOrNull;
+    _synoball.upsertAccount(
+      SynoballAccount(
+        id: accountId,
+        entityId: canonical?.entityId ?? _legacyBridge.entityIdFor(_userId),
+        name: updated.name,
+        type: updated.type == DebtType.creditCard
+            ? SynoballAccountType.credit
+            : SynoballAccountType.loan,
+        currency: updated.currency,
+        balance: Money(
+          minorUnits: (updated.isOpen ? updated.currentBalance : 0) * 100,
+          currency: updated.currency,
+        ),
+        connectionId: canonical?.connectionId,
+        institutionId: updated.institutionId ?? canonical?.institutionId,
+        externalId: canonical?.externalId ?? updated.id,
+        isVirtual: canonical?.isVirtual ?? true,
+      ),
+    );
+    _syncFromSynoball();
+    if (previous.currentBalance != updated.currentBalance) {
+      final now = DateTime.now();
+      debtBalanceSnapshots.add(
+        DebtBalanceSnapshot(
+          id: 'debt-snapshot-${now.microsecondsSinceEpoch}',
+          debtId: debt.id,
+          date: referenceDate,
+          totalBalance: updated.currentBalance,
+          principalBalance: updated.currentPrincipal,
+          accruedInterest: updated.accruedInterest,
+          source: updated.source,
+          confidence: updated.confidence,
+        ),
+      );
+    }
+    await _changed();
+  }
+
+  Future<void> archiveDebt(String id) async {
+    final index = debts.indexWhere((item) => item.id == id);
+    if (index < 0) return;
+    debts[index] = debts[index].copyWith(
+      status: DebtStatus.archived,
+      updatedAt: DateTime.now(),
+    );
+    final debt = debts[index];
+    final accountId = debt.linkedAccountId;
+    if (accountId != null) {
+      final canonical = _synoball.state.accounts
+          .where((item) => item.id == accountId)
+          .firstOrNull;
+      if (canonical != null) {
+        _synoball.upsertAccount(
+          SynoballAccount(
+            id: canonical.id,
+            entityId: canonical.entityId,
+            name: canonical.name,
+            type: canonical.type,
+            currency: canonical.currency,
+            balance: Money(minorUnits: 0, currency: canonical.currency),
+            connectionId: canonical.connectionId,
+            institutionId: canonical.institutionId,
+            externalId: canonical.externalId,
+            isVirtual: canonical.isVirtual,
+          ),
+        );
+        _syncFromSynoball();
+      }
+    }
+    await _changed();
+  }
+
+  Future<void> addDebtPayment(DebtPayment payment) async {
+    if (debts.every((item) => item.id != payment.debtId) ||
+        debtPayments.any((item) => item.id == payment.id)) {
+      return;
+    }
+    debtPayments.add(payment);
+    await _changed();
   }
 
   Future<void> addUpcoming(UpcomingExpense expense) async {

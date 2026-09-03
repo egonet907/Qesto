@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../../core/formatters/qesto_formatters.dart';
@@ -5,6 +7,7 @@ import '../../core/theme/app_appearance_controller.dart';
 import '../../core/theme/qesto_theme.dart';
 import '../../data/models/qesto_models.dart';
 import '../../features/budget/state/budget_controller.dart';
+import '../../features/capital/domain/goal_planning_service.dart';
 import '../../features/profile/services/cbr_currency_service.dart';
 import '../../synoball/ai/context.dart';
 import '../widgets/desktop_chrome.dart';
@@ -13,6 +16,7 @@ import '../widgets/desktop_components.dart';
 class DesktopGoalsPage extends StatelessWidget {
   const DesktopGoalsPage({required this.controller, super.key});
   final BudgetController controller;
+  static const _planningService = GoalPlanningService();
 
   static const categories = <String>[
     'Финансовая подушка',
@@ -30,8 +34,14 @@ class DesktopGoalsPage extends StatelessWidget {
   );
 
   Widget _buildContent(BuildContext context) {
-    final goals = controller.savingsGoals;
-    if (goals.isEmpty) {
+    final portfolio = _planningService.calculate(
+      goals: controller.savingsGoals,
+      allocations: controller.goalAllocations,
+      contributions: controller.goalContributions,
+      asOf: controller.referenceDate,
+      baseCurrency: controller.user.defaultCurrency,
+    );
+    if (portfolio.goals.isEmpty) {
       return ListView(
         padding: const EdgeInsets.fromLTRB(26, 20, 26, 30),
         children: [
@@ -39,7 +49,8 @@ class DesktopGoalsPage extends StatelessWidget {
           const SizedBox(height: 16),
           DesktopEmptyState(
             title: 'Целей пока нет',
-            message: 'Создайте цель, укажите сумму и дату завершения.',
+            message:
+                'Добавьте цель, чтобы Qesto помогал отслеживать прогресс и рассчитывал необходимый темп накопления.',
             icon: Icons.flag_outlined,
             action: FilledButton.icon(
               onPressed: () => _openEditor(context),
@@ -57,18 +68,28 @@ class DesktopGoalsPage extends StatelessWidget {
         children: [
           _GoalsHeader(onAdd: () => _openEditor(context)),
           const SizedBox(height: 16),
+          _GoalsSummaryCard(portfolio: portfolio),
+          const SizedBox(height: 16),
+          _GoalsMonthlyCard(portfolio: portfolio),
+          const SizedBox(height: 20),
+          const Text(
+            'Активные цели',
+            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 12),
           Wrap(
             spacing: 14,
             runSpacing: 14,
             children: [
-              for (final goal in goals)
+              for (final plan in portfolio.goals)
                 SizedBox(
                   width: 350,
-                  height: 252,
+                  height: 320,
                   child: _GoalCard(
-                    goal: goal,
-                    onEdit: () => _openEditor(context, goal: goal),
-                    onDelete: () => _delete(context, goal),
+                    plan: plan,
+                    onOpen: () => _openDetails(context, plan.goal),
+                    onEdit: () => _openEditor(context, goal: plan.goal),
+                    onDelete: () => _archive(context, plan.goal),
                   ),
                 ),
             ],
@@ -86,10 +107,27 @@ class DesktopGoalsPage extends StatelessWidget {
     final saved = TextEditingController(
       text: goal == null ? '0' : goal.savedAmount.toString(),
     );
+    final desiredMonthly = TextEditingController(
+      text: goal?.desiredMonthlyContribution?.toString() ?? '',
+    );
+    final reminderAmount = TextEditingController(
+      text: goal?.reminder?.amount.toString() ?? '',
+    );
+    final reminderDay = TextEditingController(
+      text: goal?.reminder?.day.toString() ?? '12',
+    );
+    final comment = TextEditingController(text: goal?.comment ?? '');
     var category = goal?.category ?? categories.first;
     var targetDate =
         goal?.targetDate ?? DateTime.now().add(const Duration(days: 180));
+    var hasTargetDate = goal?.targetDate != null;
     var currency = goal?.currency ?? controller.user.defaultCurrency;
+    var priority = goal?.priority ?? GoalPriority.medium;
+    var status = goal?.effectiveStatus ?? GoalStatus.active;
+    var reminderEnabled = goal?.reminder?.enabled ?? false;
+    var reminderCadence =
+        goal?.reminder?.cadence ?? GoalReminderCadence.monthly;
+    var goalType = goal?.type ?? GoalType.targetAmount;
     if (!const {'RUB', 'USD', 'EUR', 'CNY'}.contains(currency)) {
       currency = 'RUB';
     }
@@ -129,6 +167,37 @@ class DesktopGoalsPage extends StatelessWidget {
                     onChanged: (value) {
                       if (value != null) {
                         setDialogState(() => category = value);
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<GoalType>(
+                    key: const Key('goal-type-field'),
+                    initialValue: goalType,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Тип цели',
+                      prefixIcon: Icon(Icons.route_outlined),
+                    ),
+                    items: [
+                      for (final item in GoalType.values)
+                        DropdownMenuItem(
+                          value: item,
+                          child: Text(_goalTypeLabel(item)),
+                        ),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) {
+                        setDialogState(() {
+                          goalType = value;
+                          if (value == GoalType.targetAmountDate) {
+                            hasTargetDate = true;
+                          } else if (value == GoalType.targetAmount ||
+                              value == GoalType.recurringSaving ||
+                              value == GoalType.reserve) {
+                            hasTargetDate = false;
+                          }
+                        });
                       }
                     },
                   ),
@@ -179,28 +248,185 @@ class DesktopGoalsPage extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 12),
-                  InkWell(
-                    key: const Key('goal-date-field'),
-                    onTap: () async {
-                      final value = await showDatePicker(
-                        context: context,
-                        initialDate: targetDate,
-                        firstDate: DateTime.now(),
-                        lastDate: DateTime.now().add(
-                          const Duration(days: 3650),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          key: const Key('goal-monthly-field'),
+                          controller: desiredMonthly,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            labelText: 'Желаемый взнос в месяц',
+                            prefixIcon: Icon(Icons.savings_outlined),
+                          ),
                         ),
-                      );
-                      if (value != null) {
-                        setDialogState(() => targetDate = value);
-                      }
-                    },
-                    borderRadius: BorderRadius.circular(12),
-                    child: InputDecorator(
-                      decoration: const InputDecoration(
-                        labelText: 'Срок цели',
-                        prefixIcon: Icon(Icons.event_outlined),
                       ),
-                      child: Text(formatDate(targetDate, includeYear: true)),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: DropdownButtonFormField<GoalPriority>(
+                          key: const Key('goal-priority-field'),
+                          isExpanded: true,
+                          initialValue: priority,
+                          decoration: const InputDecoration(
+                            labelText: 'Приоритет',
+                          ),
+                          items: [
+                            for (final item in GoalPriority.values)
+                              DropdownMenuItem(
+                                value: item,
+                                child: Text(_goalPriorityLabel(item)),
+                              ),
+                          ],
+                          onChanged: (value) {
+                            if (value != null) {
+                              setDialogState(() => priority = value);
+                            }
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: DropdownButtonFormField<GoalStatus>(
+                          key: const Key('goal-status-field'),
+                          isExpanded: true,
+                          initialValue: status,
+                          decoration: const InputDecoration(
+                            labelText: 'Статус',
+                          ),
+                          items: [
+                            for (final item in GoalStatus.values.where(
+                              (item) => item != GoalStatus.archived,
+                            ))
+                              DropdownMenuItem(
+                                value: item,
+                                child: Text(_goalStatusLabel(item)),
+                              ),
+                          ],
+                          onChanged: (value) {
+                            if (value != null) {
+                              setDialogState(() => status = value);
+                            }
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  SwitchListTile.adaptive(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Установить срок'),
+                    subtitle: const Text(
+                      'Если срок задан, Qesto рассчитает обязательный взнос',
+                    ),
+                    value: hasTargetDate,
+                    onChanged: (value) => setDialogState(() {
+                      hasTargetDate = value;
+                      if (value) {
+                        goalType = GoalType.targetAmountDate;
+                      } else if (goalType == GoalType.targetAmountDate) {
+                        goalType = GoalType.targetAmount;
+                      }
+                    }),
+                  ),
+                  if (hasTargetDate)
+                    InkWell(
+                      key: const Key('goal-date-field'),
+                      onTap: () async {
+                        final value = await showDatePicker(
+                          context: context,
+                          initialDate: targetDate.isBefore(DateTime.now())
+                              ? DateTime.now()
+                              : targetDate,
+                          firstDate: DateTime.now(),
+                          lastDate: DateTime.now().add(
+                            const Duration(days: 3650),
+                          ),
+                        );
+                        if (value != null) {
+                          setDialogState(() => targetDate = value);
+                        }
+                      },
+                      borderRadius: BorderRadius.circular(12),
+                      child: InputDecorator(
+                        decoration: const InputDecoration(
+                          labelText: 'Срок цели',
+                          prefixIcon: Icon(Icons.event_outlined),
+                        ),
+                        child: Text(formatDate(targetDate, includeYear: true)),
+                      ),
+                    ),
+                  const SizedBox(height: 8),
+                  SwitchListTile.adaptive(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Напоминать откладывать'),
+                    subtitle: const Text(
+                      'Настройка сохранится для будущих уведомлений',
+                    ),
+                    value: reminderEnabled,
+                    onChanged: (value) =>
+                        setDialogState(() => reminderEnabled = value),
+                  ),
+                  if (reminderEnabled) ...[
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            key: const Key('goal-reminder-amount-field'),
+                            controller: reminderAmount,
+                            keyboardType: TextInputType.number,
+                            decoration: const InputDecoration(
+                              labelText: 'Сумма напоминания',
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        SizedBox(
+                          width: 120,
+                          child: TextField(
+                            key: const Key('goal-reminder-day-field'),
+                            controller: reminderDay,
+                            keyboardType: TextInputType.number,
+                            decoration: const InputDecoration(
+                              labelText: 'День месяца',
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        SizedBox(
+                          width: 145,
+                          child: DropdownButtonFormField<GoalReminderCadence>(
+                            initialValue: reminderCadence,
+                            decoration: const InputDecoration(
+                              labelText: 'Периодичность',
+                            ),
+                            items: const [
+                              DropdownMenuItem(
+                                value: GoalReminderCadence.monthly,
+                                child: Text('Ежемесячно'),
+                              ),
+                              DropdownMenuItem(
+                                value: GoalReminderCadence.weekly,
+                                child: Text('Еженедельно'),
+                              ),
+                            ],
+                            onChanged: (value) {
+                              if (value != null) {
+                                setDialogState(() => reminderCadence = value);
+                              }
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: comment,
+                    maxLines: 2,
+                    decoration: const InputDecoration(
+                      labelText: 'Комментарий',
+                      prefixIcon: Icon(Icons.notes_rounded),
                     ),
                   ),
                   if (error != null) ...[
@@ -223,14 +449,27 @@ class DesktopGoalsPage extends StatelessWidget {
               key: const Key('goal-save-button'),
               onPressed: () {
                 final targetAmount = _amount(target.text);
-                final savedAmount = _amount(saved.text);
-                if (title.text.trim().isEmpty || targetAmount <= 0) {
+                final reminderValue = _amount(reminderAmount.text);
+                final reminderDayValue = _amount(reminderDay.text);
+                final targetRequired = goalType != GoalType.recurringSaving;
+                if (title.text.trim().isEmpty ||
+                    targetAmount < 0 ||
+                    (targetRequired && targetAmount <= 0) ||
+                    (!targetRequired &&
+                        targetAmount == 0 &&
+                        _amount(desiredMonthly.text) <= 0)) {
                   setDialogState(
-                    () => error = 'Укажите название и сумму больше нуля',
+                    () => error = targetRequired
+                        ? 'Укажите название и сумму больше нуля'
+                        : 'Для регулярной цели укажите ежемесячный взнос',
                   );
-                } else if (savedAmount > targetAmount) {
+                } else if (reminderEnabled &&
+                    (reminderValue <= 0 ||
+                        reminderDayValue < 1 ||
+                        reminderDayValue > 31)) {
                   setDialogState(
-                    () => error = 'Накоплено не может быть больше цели',
+                    () => error =
+                        'Для напоминания укажите сумму и день от 1 до 31',
                   );
                 } else {
                   Navigator.pop(dialogContext, true);
@@ -243,14 +482,29 @@ class DesktopGoalsPage extends StatelessWidget {
       ),
     );
     if (shouldSave == true) {
+      final monthly = _amount(desiredMonthly.text);
+      final reminder = reminderEnabled
+          ? GoalReminder(
+              enabled: true,
+              amount: _amount(reminderAmount.text),
+              day: _amount(reminderDay.text),
+              cadence: reminderCadence,
+            )
+          : null;
       if (goal == null) {
         await controller.addSavingsGoal(
           title: title.text,
           category: category,
           targetAmount: _amount(target.text),
           savedAmount: _amount(saved.text),
-          targetDate: targetDate,
+          targetDate: hasTargetDate ? targetDate : null,
           currency: currency,
+          desiredMonthlyContribution: monthly > 0 ? monthly : null,
+          priority: priority,
+          status: status,
+          reminder: reminder,
+          type: goalType,
+          comment: comment.text,
         );
       } else {
         await controller.updateSavingsGoal(
@@ -259,8 +513,19 @@ class DesktopGoalsPage extends StatelessWidget {
             category: category,
             targetAmount: _amount(target.text),
             savedAmount: _amount(saved.text),
-            targetDate: targetDate,
+            targetDate: hasTargetDate ? targetDate : null,
             currency: currency,
+            desiredMonthlyContribution: monthly > 0 ? monthly : null,
+            priority: priority,
+            status: status,
+            isActive: status == GoalStatus.active,
+            reminder: reminder,
+            type: goalType,
+            comment: comment.text,
+            clearComment: comment.text.trim().isEmpty,
+            clearTargetDate: !hasTargetDate,
+            clearDesiredMonthlyContribution: monthly <= 0,
+            clearReminder: reminder == null,
           ),
         );
       }
@@ -271,14 +536,29 @@ class DesktopGoalsPage extends StatelessWidget {
     title.dispose();
     target.dispose();
     saved.dispose();
+    desiredMonthly.dispose();
+    reminderAmount.dispose();
+    reminderDay.dispose();
+    comment.dispose();
   }
 
-  Future<void> _delete(BuildContext context, SavingsGoal goal) async {
+  Future<void> _openDetails(BuildContext context, SavingsGoal goal) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (context) =>
+            _DesktopGoalDetailsPage(controller: controller, goalId: goal.id),
+      ),
+    );
+  }
+
+  Future<void> _archive(BuildContext context, SavingsGoal goal) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Удалить цель?'),
-        content: Text('«${goal.title}» будет удалена.'),
+        title: const Text('Архивировать цель?'),
+        content: Text(
+          '«${goal.title}» исчезнет из активных целей, но история сохранится.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -287,17 +567,43 @@ class DesktopGoalsPage extends StatelessWidget {
           FilledButton(
             key: const Key('goal-delete-confirm'),
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Удалить'),
+            child: const Text('В архив'),
           ),
         ],
       ),
     );
-    if (confirmed == true) await controller.deleteSavingsGoal(goal.id);
+    if (confirmed == true) {
+      await controller.updateSavingsGoal(
+        goal.copyWith(status: GoalStatus.archived, isActive: false),
+      );
+    }
   }
 
   int _amount(String value) =>
       int.tryParse(value.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
 }
+
+String _goalPriorityLabel(GoalPriority priority) => switch (priority) {
+  GoalPriority.low => 'Низкий',
+  GoalPriority.medium => 'Обычный',
+  GoalPriority.high => 'Высокий',
+};
+
+String _goalTypeLabel(GoalType type) => switch (type) {
+  GoalType.targetAmountDate => 'Сумма к определённой дате',
+  GoalType.targetAmount => 'Целевая сумма без срока',
+  GoalType.recurringSaving => 'Откладывать регулярно',
+  GoalType.reserve => 'Поддерживать резерв',
+};
+
+String _goalStatusLabel(GoalStatus status) => switch (status) {
+  GoalStatus.active => 'Активна',
+  GoalStatus.funded => 'Сумма собрана',
+  GoalStatus.spending => 'Используется',
+  GoalStatus.completed => 'Достигнута',
+  GoalStatus.paused => 'На паузе',
+  GoalStatus.archived => 'В архиве',
+};
 
 class _GoalsHeader extends StatelessWidget {
   const _GoalsHeader({required this.onAdd});
@@ -332,15 +638,60 @@ class _GoalsHeader extends StatelessWidget {
   );
 }
 
-class _GoalCard extends StatelessWidget {
-  const _GoalCard({
-    required this.goal,
-    required this.onEdit,
-    required this.onDelete,
-  });
-  final SavingsGoal goal;
-  final VoidCallback onEdit;
-  final VoidCallback onDelete;
+class _GoalsSummaryCard extends StatelessWidget {
+  const _GoalsSummaryCard({required this.portfolio});
+  final GoalPortfolioPlan portfolio;
+
+  @override
+  Widget build(BuildContext context) => DesktopCard(
+    color: QestoColors.primarySoft.withValues(alpha: 0.55),
+    borderColor: QestoColors.primary.withValues(alpha: 0.16),
+    child: Row(
+      children: [
+        Container(
+          width: 44,
+          height: 44,
+          decoration: BoxDecoration(
+            color: QestoColors.primary.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(13),
+          ),
+          child: const Icon(Icons.flag_outlined, color: QestoColors.primary),
+        ),
+        const SizedBox(width: 13),
+        Expanded(
+          child: _GoalSummaryValue(
+            label: 'Активные цели',
+            value: '${portfolio.activeCount}',
+          ),
+        ),
+        Expanded(
+          child: _GoalSummaryValue(
+            label: 'Нужно',
+            value: formatMoney(portfolio.targetAmount, portfolio.baseCurrency),
+          ),
+        ),
+        Expanded(
+          child: _GoalSummaryValue(
+            label: 'Накоплено',
+            value: formatMoney(portfolio.currentAmount, portfolio.baseCurrency),
+          ),
+        ),
+        Expanded(
+          child: _GoalSummaryValue(
+            label: 'План в месяц',
+            value: portfolio.monthlyPlan == 0
+                ? 'Не рассчитан'
+                : formatMoney(portfolio.monthlyPlan, portfolio.baseCurrency),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _GoalsMonthlyCard extends StatelessWidget {
+  const _GoalsMonthlyCard({required this.portfolio});
+  final GoalPortfolioPlan portfolio;
 
   @override
   Widget build(BuildContext context) => DesktopCard(
@@ -349,73 +700,61 @@ class _GoalCard extends StatelessWidget {
       children: [
         Row(
           children: [
-            const Icon(Icons.flag_outlined, color: QestoColors.primary),
-            const SizedBox(width: 9),
-            Expanded(
-              child: Text(
-                goal.title,
-                style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w800,
-                ),
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: QestoColors.purple.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(
+                Icons.calendar_month_outlined,
+                color: QestoColors.purple,
               ),
             ),
-            IconButton(
-              key: Key('goal-edit-${goal.id}'),
-              tooltip: 'Редактировать',
-              onPressed: onEdit,
-              icon: const Icon(Icons.edit_outlined, size: 18),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text(
+                'План этого месяца',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
+              ),
             ),
-            IconButton(
-              key: Key('goal-delete-${goal.id}'),
-              tooltip: 'Удалить',
-              onPressed: onDelete,
-              icon: const Icon(Icons.delete_outline_rounded, size: 18),
+            Text(
+              portfolio.monthlyPlan == 0
+                  ? 'План не задан'
+                  : '${(portfolio.monthlyProgress * 100).round()}%',
+              style: const TextStyle(
+                color: QestoColors.primary,
+                fontWeight: FontWeight.w900,
+              ),
             ),
           ],
         ),
-        Text(
-          goal.category,
-          style: const TextStyle(
-            color: QestoColors.primary,
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
         const SizedBox(height: 14),
-        Text(
-          '${formatMoney(goal.savedAmount, goal.currency)} из ${formatMoney(goal.targetAmount, goal.currency)}',
-          style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w900),
-        ),
+        DesktopProgressBar(value: portfolio.monthlyProgress, height: 8),
         const SizedBox(height: 12),
-        DesktopProgressBar(
-          value: goal.progress.clamp(0, 1).toDouble(),
-          height: 8,
-        ),
-        const SizedBox(height: 8),
-        Text(
-          '${(goal.progress * 100).clamp(0, 100).round()}% накоплено',
-          style: const TextStyle(
-            color: QestoColors.secondaryText,
-            fontSize: 11,
-          ),
-        ),
-        const Spacer(),
-        Row(
+        Wrap(
+          spacing: 44,
+          runSpacing: 10,
           children: [
-            const Icon(
-              Icons.event_outlined,
-              size: 15,
-              color: QestoColors.secondaryText,
+            _GoalSummaryValue(
+              label: 'Нужно отложить',
+              value: portfolio.monthlyPlan == 0
+                  ? 'Не рассчитано'
+                  : formatMoney(portfolio.monthlyPlan, portfolio.baseCurrency),
             ),
-            const SizedBox(width: 6),
-            Text(
-              goal.targetDate == null
-                  ? 'Срок не задан'
-                  : 'До ${formatDate(goal.targetDate!, includeYear: true)}',
-              style: const TextStyle(
-                color: QestoColors.secondaryText,
-                fontSize: 11,
+            _GoalSummaryValue(
+              label: 'Отложено',
+              value: formatMoney(
+                portfolio.actualThisMonth,
+                portfolio.baseCurrency,
+              ),
+            ),
+            _GoalSummaryValue(
+              label: 'Осталось',
+              value: formatMoney(
+                portfolio.monthlyPlanGap,
+                portfolio.baseCurrency,
               ),
             ),
           ],
@@ -424,6 +763,1207 @@ class _GoalCard extends StatelessWidget {
     ),
   );
 }
+
+class _GoalSummaryValue extends StatelessWidget {
+  const _GoalSummaryValue({required this.label, required this.value});
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        label,
+        style: const TextStyle(color: QestoColors.secondaryText, fontSize: 10),
+      ),
+      const SizedBox(height: 4),
+      Text(
+        value,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
+      ),
+    ],
+  );
+}
+
+class _GoalCard extends StatelessWidget {
+  const _GoalCard({
+    required this.plan,
+    required this.onOpen,
+    required this.onEdit,
+    required this.onDelete,
+  });
+  final GoalPlan plan;
+  final VoidCallback onOpen;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final goal = plan.goal;
+    final status = plan.effectiveStatus;
+    return DesktopCard(
+      onTap: onOpen,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                status == GoalStatus.completed || status == GoalStatus.funded
+                    ? Icons.emoji_events_outlined
+                    : Icons.flag_outlined,
+                color:
+                    status == GoalStatus.completed ||
+                        status == GoalStatus.funded
+                    ? QestoColors.positive
+                    : QestoColors.primary,
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Text(
+                  goal.title,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              IconButton(
+                key: Key('goal-edit-${goal.id}'),
+                tooltip: 'Редактировать',
+                onPressed: onEdit,
+                icon: const Icon(Icons.edit_outlined, size: 18),
+              ),
+              IconButton(
+                key: Key('goal-delete-${goal.id}'),
+                tooltip: 'В архив',
+                onPressed: onDelete,
+                icon: const Icon(Icons.archive_outlined, size: 18),
+              ),
+            ],
+          ),
+          Text(
+            goal.category,
+            style: const TextStyle(
+              color: QestoColors.primary,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 14),
+          Text(
+            goal.targetAmount == 0
+                ? '${formatMoney(plan.actualContributionThisMonth, goal.currency)} в этом месяце'
+                : '${formatMoney(plan.currentAmount, goal.currency)} из ${formatMoney(goal.targetAmount, goal.currency)}',
+            style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 12),
+          DesktopProgressBar(value: plan.progressPercent, height: 8),
+          const SizedBox(height: 8),
+          Text(
+            plan.needsRestore
+                ? 'Нужно восстановить ${formatMoney(plan.remainingAmount, goal.currency)}'
+                : status == GoalStatus.completed
+                ? 'Цель реализована'
+                : status == GoalStatus.funded
+                ? 'Необходимая сумма собрана'
+                : '${(plan.progressPercent * 100).round()}% накоплено',
+            style: const TextStyle(
+              color: QestoColors.secondaryText,
+              fontSize: 11,
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (plan.requiredMonthlyContribution != null)
+            Text(
+              'Нужно откладывать ${formatMoney(plan.requiredMonthlyContribution!, goal.currency)} / месяц',
+              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800),
+            )
+          else if (plan.projectedCompletionDate != null)
+            Text(
+              'Текущий темп: примерно ${capitalize(formatBudgetPeriod(plan.projectedCompletionDate!.month, plan.projectedCompletionDate!.year, includeYear: true))}',
+              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800),
+            )
+          else
+            Text(
+              plan.isTargetDateExpired
+                  ? 'Срок цели прошёл · измените дату'
+                  : goal.type == GoalType.recurringSaving
+                  ? 'План: ${formatMoney(goal.desiredMonthlyContribution ?? 0, goal.currency)} / месяц'
+                  : 'Укажите срок или ежемесячный взнос для прогноза',
+              style: TextStyle(
+                color: plan.isTargetDateExpired
+                    ? QestoColors.warning
+                    : QestoColors.secondaryText,
+                fontSize: 10,
+              ),
+            ),
+          if (plan.plannedMonthlyContribution != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              'В этом месяце: ${formatMoney(plan.actualContributionThisMonth, goal.currency)} / ${formatMoney(plan.plannedMonthlyContribution!, goal.currency)}',
+              style: const TextStyle(
+                color: QestoColors.secondaryText,
+                fontSize: 10,
+              ),
+            ),
+          ],
+          const Spacer(),
+          Row(
+            children: [
+              const Icon(
+                Icons.event_outlined,
+                size: 15,
+                color: QestoColors.secondaryText,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                goal.targetDate == null
+                    ? 'Срок не задан'
+                    : 'До ${formatDate(goal.targetDate!, includeYear: true)}',
+                style: const TextStyle(
+                  color: QestoColors.secondaryText,
+                  fontSize: 11,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DesktopGoalDetailsPage extends StatelessWidget {
+  const _DesktopGoalDetailsPage({
+    required this.controller,
+    required this.goalId,
+  });
+
+  final BudgetController controller;
+  final String goalId;
+  static const _service = GoalPlanningService();
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(
+      title: const Text('Цель'),
+      leading: IconButton(
+        tooltip: 'Назад',
+        onPressed: () => Navigator.pop(context),
+        icon: const Icon(Icons.arrow_back_rounded),
+      ),
+    ),
+    body: AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        final goal = controller.savingsGoals
+            .where((item) => item.id == goalId)
+            .firstOrNull;
+        if (goal == null) {
+          return const Center(child: Text('Цель не найдена'));
+        }
+        final plan = _service.calculateGoal(
+          goal: goal,
+          allocations: controller.goalAllocations
+              .where((item) => item.goalId == goal.id)
+              .toList(growable: false),
+          contributions: controller.goalContributions
+              .where((item) => item.goalId == goal.id)
+              .toList(growable: false),
+          asOf: controller.referenceDate,
+        );
+        return _buildContent(context, plan);
+      },
+    ),
+  );
+
+  Widget _buildContent(BuildContext context, GoalPlan plan) {
+    final goal = plan.goal;
+    final events =
+        controller.goalHistoryEvents
+            .where((item) => item.goalId == goal.id)
+            .toList()
+          ..sort((left, right) => right.date.compareTo(left.date));
+    return ListView(
+      key: const Key('goal-details-page'),
+      padding: const EdgeInsets.fromLTRB(28, 22, 28, 32),
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: QestoColors.primary.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Icon(
+                goal.type == GoalType.reserve
+                    ? Icons.shield_outlined
+                    : Icons.flag_outlined,
+                color: QestoColors.primary,
+              ),
+            ),
+            const SizedBox(width: 13),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    goal.title,
+                    style: const TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${_goalTypeLabel(goal.type)} · ${_goalPriorityLabel(goal.priority)} приоритет',
+                    style: const TextStyle(color: QestoColors.secondaryText),
+                  ),
+                ],
+              ),
+            ),
+            OutlinedButton.icon(
+              onPressed: () => _addContribution(context, plan),
+              icon: const Icon(Icons.add_rounded, size: 18),
+              label: const Text('Пополнение'),
+            ),
+            const SizedBox(width: 8),
+            FilledButton.tonalIcon(
+              onPressed: () => _addAllocation(context, plan),
+              icon: const Icon(Icons.account_balance_wallet_outlined, size: 18),
+              label: const Text('Распределить деньги'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        DesktopCard(
+          color: QestoColors.primarySoft.withValues(alpha: 0.45),
+          borderColor: QestoColors.primary.withValues(alpha: 0.14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                goal.targetAmount == 0
+                    ? formatMoney(
+                        plan.actualContributionThisMonth,
+                        goal.currency,
+                      )
+                    : '${formatMoney(plan.currentAmount, goal.currency)} / ${formatMoney(goal.targetAmount, goal.currency)}',
+                style: const TextStyle(
+                  fontSize: 27,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 12),
+              DesktopProgressBar(
+                value: goal.targetAmount == 0
+                    ? plan.plannedMonthlyContribution == null ||
+                              plan.plannedMonthlyContribution == 0
+                          ? 0
+                          : (plan.actualContributionThisMonth /
+                                    plan.plannedMonthlyContribution!)
+                                .clamp(0, 1)
+                    : plan.progressPercent,
+                height: 9,
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 38,
+                runSpacing: 14,
+                children: [
+                  _GoalDetailMetric(
+                    label: plan.needsRestore
+                        ? 'Нужно восстановить'
+                        : 'Осталось',
+                    value: goal.targetAmount == 0
+                        ? 'Регулярная цель'
+                        : formatMoney(plan.remainingAmount, goal.currency),
+                  ),
+                  _GoalDetailMetric(
+                    label: 'До цели',
+                    value: plan.isTargetDateExpired
+                        ? 'Срок прошёл'
+                        : plan.monthsRemaining == null
+                        ? 'Без срока'
+                        : '${plan.monthsRemaining} мес.',
+                  ),
+                  _GoalDetailMetric(
+                    label: 'Нужно в месяц',
+                    value: plan.requiredMonthlyContribution == null
+                        ? 'Не рассчитано'
+                        : formatMoney(
+                            plan.requiredMonthlyContribution!,
+                            goal.currency,
+                          ),
+                  ),
+                  _GoalDetailMetric(
+                    label: 'План пользователя',
+                    value: plan.plannedMonthlyContribution == null
+                        ? 'Не задан'
+                        : '${formatMoney(plan.plannedMonthlyContribution!, goal.currency)} / мес.',
+                  ),
+                ],
+              ),
+              if (goal.comment?.isNotEmpty == true) ...[
+                const SizedBox(height: 14),
+                Text(
+                  goal.comment!,
+                  style: const TextStyle(color: QestoColors.secondaryText),
+                ),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final chart = _GoalHistoryCard(goal: goal);
+            final month = _GoalMonthProgressCard(plan: plan);
+            if (constraints.maxWidth < 850) {
+              return Column(
+                children: [chart, const SizedBox(height: 14), month],
+              );
+            }
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(flex: 3, child: chart),
+                const SizedBox(width: 14),
+                Expanded(flex: 2, child: month),
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 14),
+        _GoalAllocationsCard(
+          plan: plan,
+          controller: controller,
+          onAdd: () => _addAllocation(context, plan),
+        ),
+        const SizedBox(height: 14),
+        _GoalWhatIfCard(plan: plan, asOf: controller.referenceDate),
+        const SizedBox(height: 14),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final contributions = _GoalTimelineCard(
+              title: 'Последние пополнения и списания',
+              emptyText: 'Операций по цели пока нет',
+              children: [
+                for (final item in plan.contributions.take(10))
+                  _GoalTimelineRow(
+                    icon: item.type == GoalContributionType.contribution
+                        ? Icons.south_west_rounded
+                        : Icons.north_east_rounded,
+                    title: item.type == GoalContributionType.contribution
+                        ? 'Пополнение'
+                        : 'Списание',
+                    subtitle: formatDate(item.date, includeYear: true),
+                    value:
+                        '${item.type == GoalContributionType.contribution ? '+' : '−'}${formatMoney(item.amount, item.currency)}',
+                    color: item.type == GoalContributionType.contribution
+                        ? QestoColors.positive
+                        : QestoColors.warning,
+                  ),
+              ],
+            );
+            final history = _GoalTimelineCard(
+              title: 'История цели',
+              emptyText: 'История начнёт собираться с новых изменений',
+              children: [
+                for (final event in events.take(10))
+                  _GoalTimelineRow(
+                    icon: Icons.history_rounded,
+                    title: event.description,
+                    subtitle: formatDate(event.date, includeYear: true),
+                    value: event.amount == null
+                        ? null
+                        : formatMoney(event.amount!, goal.currency),
+                  ),
+              ],
+            );
+            if (constraints.maxWidth < 850) {
+              return Column(
+                children: [contributions, const SizedBox(height: 14), history],
+              );
+            }
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: contributions),
+                const SizedBox(width: 14),
+                Expanded(child: history),
+              ],
+            );
+          },
+        ),
+        if (plan.isCompleted && goal.status != GoalStatus.completed) ...[
+          const SizedBox(height: 14),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: FilledButton.icon(
+              onPressed: () => controller.updateSavingsGoal(
+                goal.copyWith(
+                  status: GoalStatus.completed,
+                  isActive: false,
+                  completedAt: DateTime.now(),
+                ),
+              ),
+              icon: const Icon(Icons.check_circle_outline_rounded),
+              label: const Text('Отметить цель реализованной'),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Future<void> _addContribution(BuildContext context, GoalPlan plan) async {
+    final amount = TextEditingController();
+    final comment = TextEditingController();
+    var type = GoalContributionType.contribution;
+    var date = DateTime.now();
+    String? error;
+    final save = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          key: const Key('goal-contribution-dialog'),
+          title: const Text('Операция по цели'),
+          content: SizedBox(
+            width: 410,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SegmentedButton<GoalContributionType>(
+                  segments: const [
+                    ButtonSegment(
+                      value: GoalContributionType.contribution,
+                      label: Text('Пополнение'),
+                    ),
+                    ButtonSegment(
+                      value: GoalContributionType.withdrawal,
+                      label: Text('Списание'),
+                    ),
+                  ],
+                  selected: {type},
+                  onSelectionChanged: (value) =>
+                      setDialogState(() => type = value.first),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  key: const Key('goal-contribution-amount-field'),
+                  controller: amount,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(
+                    labelText: 'Сумма, ${plan.goal.currency}',
+                  ),
+                ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.event_outlined),
+                  title: Text(formatDate(date, includeYear: true)),
+                  onTap: () async {
+                    final value = await showDatePicker(
+                      context: context,
+                      initialDate: date,
+                      firstDate: plan.goal.createdAt ?? DateTime(2000),
+                      lastDate: DateTime.now(),
+                    );
+                    if (value != null) setDialogState(() => date = value);
+                  },
+                ),
+                TextField(
+                  controller: comment,
+                  decoration: const InputDecoration(labelText: 'Комментарий'),
+                ),
+                if (error != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    error!,
+                    style: const TextStyle(color: QestoColors.danger),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Отмена'),
+            ),
+            FilledButton(
+              key: const Key('goal-contribution-save'),
+              onPressed: () {
+                if (_parseGoalAmount(amount.text) <= 0) {
+                  setDialogState(() => error = 'Укажите сумму больше нуля');
+                } else {
+                  Navigator.pop(dialogContext, true);
+                }
+              },
+              child: const Text('Добавить'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (save == true) {
+      await controller.addGoalContribution(
+        goalId: plan.goal.id,
+        amount: _parseGoalAmount(amount.text),
+        type: type,
+        date: date,
+        comment: comment.text,
+      );
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    amount.dispose();
+    comment.dispose();
+  }
+
+  Future<void> _addAllocation(BuildContext context, GoalPlan plan) async {
+    final sources = <_GoalSourceOption>[
+      for (final account in controller.accounts.where(
+        (item) =>
+            {
+              AccountType.cash,
+              AccountType.bankCard,
+              AccountType.savings,
+              AccountType.deposit,
+            }.contains(item.type) &&
+            item.balance > 0,
+      ))
+        _GoalSourceOption(
+          id: account.id,
+          type: GoalAllocationSourceType.account,
+          title: account.title,
+          balance: account.balance,
+          currency: account.currency,
+        ),
+      for (final account in controller.investmentAccounts.where(
+        (item) => item.isActive && item.currentBalance > 0,
+      ))
+        _GoalSourceOption(
+          id: account.id,
+          type: GoalAllocationSourceType.investmentAccount,
+          title: account.name,
+          balance: account.currentBalance,
+          currency: account.currency,
+        ),
+    ];
+    if (sources.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Сначала добавьте счёт с положительным балансом'),
+        ),
+      );
+      return;
+    }
+    var source = sources.first;
+    final amount = TextEditingController();
+    String? error;
+    final save = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final existing = controller.goalAllocations
+              .where(
+                (item) =>
+                    item.goalId == plan.goal.id &&
+                    item.sourceId == source.id &&
+                    item.sourceType == source.type,
+              )
+              .firstOrNull;
+          final availability = _service.allocationAvailability(
+            sourceBalance: source.balance,
+            sourceId: source.id,
+            sourceType: source.type,
+            allocations: controller.goalAllocations,
+            excludingAllocationId: existing?.id,
+          );
+          return AlertDialog(
+            key: const Key('goal-allocation-dialog'),
+            title: const Text('Распределить деньги на цель'),
+            content: SizedBox(
+              width: 430,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  DropdownButtonFormField<_GoalSourceOption>(
+                    initialValue: source,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Где находятся деньги',
+                    ),
+                    items: [
+                      for (final item in sources)
+                        DropdownMenuItem(
+                          value: item,
+                          child: Text(
+                            '${item.title} · ${formatMoney(item.balance, item.currency)}',
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) {
+                        setDialogState(() {
+                          source = value;
+                          amount.clear();
+                          error = null;
+                        });
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    key: const Key('goal-allocation-amount-field'),
+                    controller: amount,
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      labelText: 'Сумма, ${source.currency}',
+                      helperText:
+                          'Доступно без двойного распределения: ${formatMoney(availability.available, source.currency)}',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Это логическая разметка. Реальный баланс счёта не изменится.',
+                    style: TextStyle(
+                      color: QestoColors.secondaryText,
+                      fontSize: 11,
+                    ),
+                  ),
+                  if (error != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      error!,
+                      style: const TextStyle(color: QestoColors.danger),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Отмена'),
+              ),
+              FilledButton(
+                key: const Key('goal-allocation-save'),
+                onPressed: () {
+                  final value = _parseGoalAmount(amount.text);
+                  if (value <= 0 || value > availability.available) {
+                    setDialogState(
+                      () => error = 'Сумма превышает доступный баланс',
+                    );
+                  } else {
+                    Navigator.pop(dialogContext, true);
+                  }
+                },
+                child: const Text('Распределить'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    if (save == true) {
+      final existing = controller.goalAllocations
+          .where(
+            (item) =>
+                item.goalId == plan.goal.id &&
+                item.sourceId == source.id &&
+                item.sourceType == source.type,
+          )
+          .firstOrNull;
+      final success = await controller.upsertGoalAllocation(
+        GoalAllocation(
+          id:
+              existing?.id ??
+              'goal-allocation-${DateTime.now().microsecondsSinceEpoch}',
+          goalId: plan.goal.id,
+          sourceType: source.type,
+          sourceId: source.id,
+          allocatedAmount: _parseGoalAmount(amount.text),
+          currency: source.currency,
+          updatedAt: DateTime.now(),
+        ),
+      );
+      if (!success && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Не удалось распределить: проверьте доступный баланс',
+            ),
+          ),
+        );
+      }
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    amount.dispose();
+  }
+}
+
+class _GoalSourceOption {
+  const _GoalSourceOption({
+    required this.id,
+    required this.type,
+    required this.title,
+    required this.balance,
+    required this.currency,
+  });
+  final String id;
+  final GoalAllocationSourceType type;
+  final String title;
+  final int balance;
+  final String currency;
+}
+
+class _GoalDetailMetric extends StatelessWidget {
+  const _GoalDetailMetric({required this.label, required this.value});
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: 170,
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            color: QestoColors.secondaryText,
+            fontSize: 10,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
+        ),
+      ],
+    ),
+  );
+}
+
+class _GoalHistoryCard extends StatelessWidget {
+  const _GoalHistoryCard({required this.goal});
+  final SavingsGoal goal;
+
+  @override
+  Widget build(BuildContext context) => DesktopCard(
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'График накопления',
+          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 14),
+        SizedBox(
+          height: 160,
+          child: goal.history.length < 2
+              ? const Center(
+                  child: Text(
+                    'Недостаточно истории для графика',
+                    style: TextStyle(color: QestoColors.secondaryText),
+                  ),
+                )
+              : CustomPaint(
+                  painter: _GoalHistoryPainter(goal.history),
+                  size: Size.infinite,
+                ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _GoalMonthProgressCard extends StatelessWidget {
+  const _GoalMonthProgressCard({required this.plan});
+  final GoalPlan plan;
+
+  @override
+  Widget build(BuildContext context) {
+    final target = plan.plannedMonthlyContribution ?? 0;
+    final progress = target <= 0
+        ? 0.0
+        : (plan.actualContributionThisMonth / target).clamp(0, 1);
+    return DesktopCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'План месяца',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 14),
+          Text(
+            target <= 0
+                ? 'Не задан'
+                : '${formatMoney(plan.actualContributionThisMonth, plan.goal.currency)} / ${formatMoney(target, plan.goal.currency)}',
+            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 12),
+          DesktopProgressBar(value: progress.toDouble(), height: 8),
+          const SizedBox(height: 9),
+          Text(
+            target <= 0
+                ? 'Укажите ежемесячный взнос в настройках цели'
+                : plan.monthlyPlanGap == 0
+                ? 'План выполнен'
+                : 'Осталось ${formatMoney(plan.monthlyPlanGap, plan.goal.currency)}',
+            style: const TextStyle(
+              color: QestoColors.secondaryText,
+              fontSize: 11,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _GoalAllocationsCard extends StatelessWidget {
+  const _GoalAllocationsCard({
+    required this.plan,
+    required this.controller,
+    required this.onAdd,
+  });
+  final GoalPlan plan;
+  final BudgetController controller;
+  final VoidCallback onAdd;
+
+  @override
+  Widget build(BuildContext context) => DesktopCard(
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Expanded(
+              child: Text(
+                'Где находятся деньги',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
+              ),
+            ),
+            TextButton.icon(
+              onPressed: onAdd,
+              icon: const Icon(Icons.add_rounded, size: 17),
+              label: const Text('Добавить источник'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        if (plan.allocations.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 14),
+            child: Text(
+              'Средства пока не связаны с конкретными счетами. Текущая сумма учитывается как ручная.',
+              style: TextStyle(color: QestoColors.secondaryText),
+            ),
+          )
+        else
+          for (final allocation in plan.allocations)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(
+                allocation.sourceType ==
+                        GoalAllocationSourceType.investmentAccount
+                    ? Icons.show_chart_rounded
+                    : Icons.account_balance_wallet_outlined,
+                color: QestoColors.primary,
+              ),
+              title: Text(_allocationSourceTitle(controller, allocation)),
+              subtitle: Text(
+                allocation.sourceType ==
+                        GoalAllocationSourceType.investmentAccount
+                    ? 'Инвестиционный счёт'
+                    : 'Ликвидный счёт',
+              ),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    formatMoney(
+                      allocation.allocatedAmount,
+                      allocation.currency,
+                    ),
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  IconButton(
+                    tooltip: 'Убрать распределение',
+                    onPressed: () =>
+                        controller.removeGoalAllocation(allocation.id),
+                    icon: const Icon(Icons.close_rounded, size: 18),
+                  ),
+                ],
+              ),
+            ),
+      ],
+    ),
+  );
+}
+
+class _GoalWhatIfCard extends StatefulWidget {
+  const _GoalWhatIfCard({required this.plan, required this.asOf});
+  final GoalPlan plan;
+  final DateTime asOf;
+
+  @override
+  State<_GoalWhatIfCard> createState() => _GoalWhatIfCardState();
+}
+
+class _GoalWhatIfCardState extends State<_GoalWhatIfCard> {
+  static const _service = GoalPlanningService();
+  late final TextEditingController _amount;
+
+  @override
+  void initState() {
+    super.initState();
+    _amount = TextEditingController(
+      text: widget.plan.plannedMonthlyContribution?.toString() ?? '',
+    )..addListener(_refresh);
+  }
+
+  @override
+  void didUpdateWidget(covariant _GoalWhatIfCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.plan.goal.id != widget.plan.goal.id) {
+      _amount.text = widget.plan.plannedMonthlyContribution?.toString() ?? '';
+    }
+  }
+
+  void _refresh() => setState(() {});
+
+  @override
+  void dispose() {
+    _amount
+      ..removeListener(_refresh)
+      ..dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final amount = _parseGoalAmount(_amount.text);
+    final simulation = _service.simulateMonthlyContribution(
+      plan: widget.plan,
+      monthlyContribution: amount,
+      asOf: widget.asOf,
+    );
+    return DesktopCard(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          const Icon(Icons.tune_rounded, color: QestoColors.purple),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Что если откладывать больше?',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  'Измените сумму — расчёт не повлияет на текущий план',
+                  style: TextStyle(
+                    color: QestoColors.secondaryText,
+                    fontSize: 11,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(
+            width: 190,
+            child: TextField(
+              controller: _amount,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                labelText: '${widget.plan.goal.currency} / месяц',
+              ),
+            ),
+          ),
+          const SizedBox(width: 18),
+          SizedBox(
+            width: 210,
+            child: Text(
+              simulation.projectedDate == null
+                  ? 'Укажите сумму для прогноза'
+                  : 'Новая дата: ${capitalize(formatBudgetPeriod(simulation.projectedDate!.month, simulation.projectedDate!.year, includeYear: true))}',
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _GoalTimelineCard extends StatelessWidget {
+  const _GoalTimelineCard({
+    required this.title,
+    required this.emptyText,
+    required this.children,
+  });
+  final String title;
+  final String emptyText;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) => DesktopCard(
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 10),
+        if (children.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 24),
+            child: Center(
+              child: Text(
+                emptyText,
+                style: const TextStyle(color: QestoColors.secondaryText),
+              ),
+            ),
+          )
+        else
+          ...children,
+      ],
+    ),
+  );
+}
+
+class _GoalTimelineRow extends StatelessWidget {
+  const _GoalTimelineRow({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    this.value,
+    this.color = QestoColors.text,
+  });
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final String? value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 7),
+    child: Row(
+      children: [
+        Icon(icon, size: 18, color: color),
+        const SizedBox(width: 9),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
+              Text(
+                subtitle,
+                style: const TextStyle(
+                  color: QestoColors.secondaryText,
+                  fontSize: 10,
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (value != null)
+          Text(
+            value!,
+            style: TextStyle(color: color, fontWeight: FontWeight.w800),
+          ),
+      ],
+    ),
+  );
+}
+
+class _GoalHistoryPainter extends CustomPainter {
+  _GoalHistoryPainter(this.points);
+  final List<SavingsHistoryPoint> points;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final ordered = List<SavingsHistoryPoint>.of(points)
+      ..sort((left, right) => left.date.compareTo(right.date));
+    if (ordered.length < 2) return;
+    final minValue = ordered
+        .map((item) => item.amount)
+        .reduce(math.min)
+        .toDouble();
+    final maxValue = ordered
+        .map((item) => item.amount)
+        .reduce(math.max)
+        .toDouble();
+    final range = math.max(1, maxValue - minValue);
+    final path = Path();
+    for (var index = 0; index < ordered.length; index++) {
+      final x = size.width * index / (ordered.length - 1);
+      final y =
+          size.height -
+          10 -
+          (ordered[index].amount - minValue) / range * (size.height - 20);
+      if (index == 0) {
+        path.moveTo(x, y);
+      } else {
+        path.lineTo(x, y);
+      }
+    }
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = QestoColors.primary
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _GoalHistoryPainter oldDelegate) =>
+      oldDelegate.points != points;
+}
+
+String _allocationSourceTitle(
+  BudgetController controller,
+  GoalAllocation allocation,
+) {
+  if (allocation.sourceType == GoalAllocationSourceType.investmentAccount) {
+    return controller.investmentAccounts
+            .where((item) => item.id == allocation.sourceId)
+            .map((item) => item.name)
+            .firstOrNull ??
+        'Инвестиционный счёт';
+  }
+  if (allocation.sourceType == GoalAllocationSourceType.account) {
+    return controller.accounts
+            .where((item) => item.id == allocation.sourceId)
+            .map((item) => item.title)
+            .firstOrNull ??
+        'Счёт';
+  }
+  return 'Ручной актив';
+}
+
+int _parseGoalAmount(String value) =>
+    int.tryParse(value.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
 
 class DesktopInsightsPage extends StatelessWidget {
   const DesktopInsightsPage({required this.controller, super.key});

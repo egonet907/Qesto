@@ -96,7 +96,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Скидка 15% в Перекрёстке'), findsOneWidget);
 
-    await tester.tap(find.text('Накопления').last);
+    await tester.tap(find.text('Капитал').last);
     await tester.pumpAndSettle();
     expect(find.text('Накоплено'), findsOneWidget);
   });
@@ -234,7 +234,7 @@ void main() {
     await tester.pumpWidget(buildApp());
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Накопления').last);
+    await tester.tap(find.text('Капитал').last);
     await tester.pumpAndSettle();
     await tester.tap(find.text('467 000 ₽'));
     await tester.pumpAndSettle();
@@ -373,8 +373,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Добавлено операций: 3'), findsOneWidget);
 
-    await tester.ensureVisible(find.text('Капитал'));
-    await tester.tap(find.text('Капитал'));
+    await tester.ensureVisible(find.byKey(const Key('budget-capital-button')));
+    await tester.tap(find.byKey(const Key('budget-capital-button')));
     await tester.pumpAndSettle();
     await tester.scrollUntilVisible(find.text('Счёт Сбербанка • 2345'), 300);
     expect(find.text('Счёт Сбербанка • 2345'), findsOneWidget);

@@ -1,6 +1,10 @@
 export 'budget_models.dart';
+export 'debt_models.dart';
+export 'investment_models.dart';
 
 import 'budget_models.dart';
+import 'debt_models.dart';
+import 'investment_models.dart';
 import '../../synoball/core/models.dart';
 
 enum AccountType {
@@ -197,6 +201,115 @@ class SavingsHistoryPoint {
   final int amount;
 }
 
+enum GoalType { targetAmountDate, targetAmount, recurringSaving, reserve }
+
+enum GoalPriority { low, medium, high }
+
+enum GoalStatus { active, funded, spending, completed, paused, archived }
+
+enum GoalReminderCadence { monthly, weekly }
+
+class GoalReminder {
+  const GoalReminder({
+    required this.enabled,
+    required this.amount,
+    required this.day,
+    this.cadence = GoalReminderCadence.monthly,
+  });
+
+  final bool enabled;
+  final int amount;
+  final int day;
+  final GoalReminderCadence cadence;
+}
+
+enum GoalAllocationSourceType { account, investmentAccount, manualAsset }
+
+enum GoalContributionSource {
+  manual,
+  transaction,
+  accountAllocation,
+  automatic,
+}
+
+enum GoalContributionType { contribution, withdrawal }
+
+enum GoalHistoryEventType {
+  created,
+  targetChanged,
+  targetDateChanged,
+  statusChanged,
+  allocationChanged,
+  funded,
+  completed,
+}
+
+class GoalContribution {
+  const GoalContribution({
+    required this.id,
+    required this.goalId,
+    required this.date,
+    required this.amount,
+    required this.currency,
+    required this.type,
+    required this.source,
+    required this.createdAt,
+    this.transactionId,
+    this.accountId,
+    this.comment,
+  });
+
+  final String id;
+  final String goalId;
+  final DateTime date;
+  final int amount;
+  final String currency;
+  final GoalContributionType type;
+  final GoalContributionSource source;
+  final DateTime createdAt;
+  final String? transactionId;
+  final String? accountId;
+  final String? comment;
+}
+
+class GoalHistoryEvent {
+  const GoalHistoryEvent({
+    required this.id,
+    required this.goalId,
+    required this.type,
+    required this.date,
+    required this.description,
+    this.amount,
+  });
+
+  final String id;
+  final String goalId;
+  final GoalHistoryEventType type;
+  final DateTime date;
+  final String description;
+  final int? amount;
+}
+
+class GoalAllocation {
+  const GoalAllocation({
+    required this.id,
+    required this.goalId,
+    required this.sourceType,
+    required this.sourceId,
+    required this.allocatedAmount,
+    required this.currency,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final String goalId;
+  final GoalAllocationSourceType sourceType;
+  final String sourceId;
+  final int allocatedAmount;
+  final String currency;
+  final DateTime updatedAt;
+}
+
 class SavingsGoal {
   const SavingsGoal({
     required this.id,
@@ -209,7 +322,18 @@ class SavingsGoal {
     required this.isActive,
     required this.history,
     this.category = 'Другое',
+    this.type = GoalType.targetAmount,
     this.targetDate,
+    this.iconKey = 'flag',
+    this.colorValue,
+    this.comment,
+    this.desiredMonthlyContribution,
+    this.priority = GoalPriority.medium,
+    this.status = GoalStatus.active,
+    this.reminder,
+    this.createdAt,
+    this.fundedAt,
+    this.completedAt,
   });
 
   final String id;
@@ -222,9 +346,30 @@ class SavingsGoal {
   final bool isActive;
   final List<SavingsHistoryPoint> history;
   final String category;
+  final GoalType type;
   final DateTime? targetDate;
+  final String iconKey;
+  final int? colorValue;
+  final String? comment;
+  final int? desiredMonthlyContribution;
+  final GoalPriority priority;
+  final GoalStatus status;
+  final GoalReminder? reminder;
+  final DateTime? createdAt;
+  final DateTime? fundedAt;
+  final DateTime? completedAt;
 
   double get progress => targetAmount == 0 ? 0 : savedAmount / targetAmount;
+  GoalStatus get effectiveStatus {
+    if (status == GoalStatus.archived) return GoalStatus.archived;
+    if (status == GoalStatus.completed) return GoalStatus.completed;
+    if (status == GoalStatus.spending) return GoalStatus.spending;
+    if (targetAmount > 0 && savedAmount >= targetAmount) {
+      return GoalStatus.funded;
+    }
+    if (status == GoalStatus.paused || !isActive) return GoalStatus.paused;
+    return status;
+  }
 
   SavingsGoal copyWith({
     String? title,
@@ -235,7 +380,24 @@ class SavingsGoal {
     bool? isActive,
     List<SavingsHistoryPoint>? history,
     String? category,
+    GoalType? type,
     DateTime? targetDate,
+    String? iconKey,
+    int? colorValue,
+    String? comment,
+    int? desiredMonthlyContribution,
+    GoalPriority? priority,
+    GoalStatus? status,
+    GoalReminder? reminder,
+    DateTime? createdAt,
+    DateTime? fundedAt,
+    DateTime? completedAt,
+    bool clearTargetDate = false,
+    bool clearDesiredMonthlyContribution = false,
+    bool clearReminder = false,
+    bool clearComment = false,
+    bool clearFundedAt = false,
+    bool clearCompletedAt = false,
   }) => SavingsGoal(
     id: id,
     userId: userId,
@@ -247,7 +409,20 @@ class SavingsGoal {
     isActive: isActive ?? this.isActive,
     history: history ?? this.history,
     category: category ?? this.category,
-    targetDate: targetDate ?? this.targetDate,
+    type: type ?? this.type,
+    targetDate: clearTargetDate ? null : targetDate ?? this.targetDate,
+    iconKey: iconKey ?? this.iconKey,
+    colorValue: colorValue ?? this.colorValue,
+    comment: clearComment ? null : comment ?? this.comment,
+    desiredMonthlyContribution: clearDesiredMonthlyContribution
+        ? null
+        : desiredMonthlyContribution ?? this.desiredMonthlyContribution,
+    priority: priority ?? this.priority,
+    status: status ?? this.status,
+    reminder: clearReminder ? null : reminder ?? this.reminder,
+    createdAt: createdAt ?? this.createdAt,
+    fundedAt: clearFundedAt ? null : fundedAt ?? this.fundedAt,
+    completedAt: clearCompletedAt ? null : completedAt ?? this.completedAt,
   );
 }
 
@@ -317,6 +492,15 @@ class UserFinancialData {
     this.upcomingExpenses = const [],
     this.plannedCumulativePoints = const [],
     this.savingsGoals = const [],
+    this.goalAllocations = const [],
+    this.goalContributions = const [],
+    this.goalHistoryEvents = const [],
+    this.investmentAccounts = const [],
+    this.investmentBalanceSnapshots = const [],
+    this.investmentContributions = const [],
+    this.debts = const [],
+    this.debtBalanceSnapshots = const [],
+    this.debtPayments = const [],
     this.trackedProducts = const [],
     this.actions = const [],
     this.synoballState,
@@ -333,6 +517,15 @@ class UserFinancialData {
   final List<UpcomingExpense> upcomingExpenses;
   final List<BudgetPlanPoint> plannedCumulativePoints;
   final List<SavingsGoal> savingsGoals;
+  final List<GoalAllocation> goalAllocations;
+  final List<GoalContribution> goalContributions;
+  final List<GoalHistoryEvent> goalHistoryEvents;
+  final List<InvestmentAccount> investmentAccounts;
+  final List<InvestmentBalanceSnapshot> investmentBalanceSnapshots;
+  final List<InvestmentContribution> investmentContributions;
+  final List<DebtAccount> debts;
+  final List<DebtBalanceSnapshot> debtBalanceSnapshots;
+  final List<DebtPayment> debtPayments;
   final List<TrackedProduct> trackedProducts;
   final List<FinancialAction> actions;
   final SynoballState? synoballState;
@@ -349,6 +542,15 @@ class UserFinancialData {
     List<UpcomingExpense>? upcomingExpenses,
     List<BudgetPlanPoint>? plannedCumulativePoints,
     List<SavingsGoal>? savingsGoals,
+    List<GoalAllocation>? goalAllocations,
+    List<GoalContribution>? goalContributions,
+    List<GoalHistoryEvent>? goalHistoryEvents,
+    List<InvestmentAccount>? investmentAccounts,
+    List<InvestmentBalanceSnapshot>? investmentBalanceSnapshots,
+    List<InvestmentContribution>? investmentContributions,
+    List<DebtAccount>? debts,
+    List<DebtBalanceSnapshot>? debtBalanceSnapshots,
+    List<DebtPayment>? debtPayments,
     List<TrackedProduct>? trackedProducts,
     List<FinancialAction>? actions,
     SynoballState? synoballState,
@@ -367,6 +569,17 @@ class UserFinancialData {
       plannedCumulativePoints:
           plannedCumulativePoints ?? this.plannedCumulativePoints,
       savingsGoals: savingsGoals ?? this.savingsGoals,
+      goalAllocations: goalAllocations ?? this.goalAllocations,
+      goalContributions: goalContributions ?? this.goalContributions,
+      goalHistoryEvents: goalHistoryEvents ?? this.goalHistoryEvents,
+      investmentAccounts: investmentAccounts ?? this.investmentAccounts,
+      investmentBalanceSnapshots:
+          investmentBalanceSnapshots ?? this.investmentBalanceSnapshots,
+      investmentContributions:
+          investmentContributions ?? this.investmentContributions,
+      debts: debts ?? this.debts,
+      debtBalanceSnapshots: debtBalanceSnapshots ?? this.debtBalanceSnapshots,
+      debtPayments: debtPayments ?? this.debtPayments,
       trackedProducts: trackedProducts ?? this.trackedProducts,
       actions: actions ?? this.actions,
       synoballState: synoballState ?? this.synoballState,

@@ -93,9 +93,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const Key('desktop-section-savings')));
+    await tester.tap(find.byKey(const Key('desktop-section-capital')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('desktop-destination-capital')));
+    await tester.tap(find.byKey(const Key('desktop-destination-liquidity')));
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('total-liquid-assets')), findsOneWidget);
@@ -266,7 +266,7 @@ void main() {
     },
   );
 
-  testWidgets('desktop is organised into Budget, Benefits and Savings', (
+  testWidgets('desktop is organised into Budget, Benefits and Capital', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(1440, 900));
@@ -284,7 +284,7 @@ void main() {
 
     expect(find.byKey(const Key('desktop-section-budget')), findsOneWidget);
     expect(find.byKey(const Key('desktop-section-benefits')), findsOneWidget);
-    expect(find.byKey(const Key('desktop-section-savings')), findsOneWidget);
+    expect(find.byKey(const Key('desktop-section-capital')), findsOneWidget);
     expect(
       find.byKey(const Key('desktop-destination-dashboard')),
       findsOneWidget,
@@ -323,14 +323,19 @@ void main() {
     );
     expect(find.text('Операции'), findsNothing);
 
-    await tester.tap(find.byKey(const Key('desktop-section-savings')));
+    await tester.tap(find.byKey(const Key('desktop-section-capital')));
     await tester.pumpAndSettle();
-    expect(find.text('Накопления · Цели'), findsOneWidget);
+    expect(find.text('Капитал · Ликвидность'), findsOneWidget);
     expect(
-      find.byKey(const Key('desktop-section-items-savings')),
+      find.byKey(const Key('desktop-section-items-capital')),
       findsOneWidget,
     );
-    expect(find.byIcon(Icons.show_chart_rounded), findsOneWidget);
+    expect(
+      find.byKey(const Key('desktop-destination-investments')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('desktop-destination-debts')), findsOneWidget);
+    expect(find.byKey(const Key('desktop-destination-goals')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -619,7 +624,9 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('desktop-section-savings')));
+    await tester.tap(find.byKey(const Key('desktop-section-capital')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('desktop-destination-goals')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('goal-add-button')));
     await tester.pumpAndSettle();
@@ -638,6 +645,88 @@ void main() {
 
     expect(find.text('Поездка в Китай'), findsOneWidget);
     expect(find.text('Финансовая подушка'), findsWidgets);
+    await tester.tap(find.text('Поездка в Китай'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('goal-details-page')), findsOneWidget);
+    expect(find.text('Что если откладывать больше?'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('desktop investment account can be created from empty state', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1440, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      QestoApp(
+        repository: const MockQestoRepository(delay: Duration.zero),
+        preferenceStore: MemoryKeyValueStore(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('desktop-section-capital')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('desktop-destination-investments')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Инвестиционных счетов пока нет'), findsOneWidget);
+    expect(tester.takeException(), isNull, reason: 'empty investment state');
+    await tester.tap(find.byKey(const Key('investment-empty-add-button')));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull, reason: 'investment editor');
+    await tester.enterText(
+      find.byKey(const Key('investment-name-field')),
+      'Т-Инвестиции',
+    );
+    await tester.enterText(
+      find.byKey(const Key('investment-balance-field')),
+      '430000',
+    );
+    expect(tester.takeException(), isNull, reason: 'investment editor values');
+    await tester.tap(find.byKey(const Key('investment-save-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Т-Инвестиции'), findsOneWidget);
+    expect(find.text('430 000 ₽'), findsWidgets);
+    expect(find.text('Пополнения по месяцам'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('desktop debt can be created from the honest empty state', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1440, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      QestoApp(
+        repository: const MockQestoRepository(delay: Duration.zero),
+        preferenceStore: MemoryKeyValueStore(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('desktop-section-capital')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('desktop-destination-debts')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Долгов нет'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('debt-add-empty')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('debt-name-field')),
+      'Учебный кредит',
+    );
+    await tester.enterText(
+      find.byKey(const Key('debt-balance-field')),
+      '125000',
+    );
+    await tester.tap(find.byKey(const Key('debt-save-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Учебный кредит'), findsOneWidget);
+    expect(find.text('125 000 ₽'), findsWidgets);
     expect(tester.takeException(), isNull);
   });
 }

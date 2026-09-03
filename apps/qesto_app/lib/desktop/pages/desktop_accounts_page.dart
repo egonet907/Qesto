@@ -39,6 +39,8 @@ class _DesktopAccountsPageState extends State<DesktopAccountsPage> {
           transactions: widget.controller.transactions,
           upcomingExpenses: widget.controller.upcomingExpenses,
           savingsGoals: widget.controller.savingsGoals,
+          goalAllocations: widget.controller.goalAllocations,
+          debts: widget.controller.debts,
           synoballState: widget.controller.synoballState,
           asOf: widget.controller.referenceDate,
           period: _period,
@@ -863,6 +865,16 @@ class _ForecastCard extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 17),
+        if (data.debtPaymentsReserved > 0) ...[
+          Text(
+            'В резерв включено ${formatMoney(data.debtPaymentsReserved, data.baseCurrency)} обязательных платежей по долгам.',
+            style: const TextStyle(
+              color: QestoColors.secondaryText,
+              fontSize: 10,
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
         const Divider(height: 1),
         const SizedBox(height: 14),
         if (data.nextExpectedIncome case final income?) ...[

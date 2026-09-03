@@ -22,6 +22,8 @@ import 'pages/desktop_budget_page.dart';
 import 'pages/desktop_bank_connections_page.dart';
 import 'pages/desktop_cash_flow_page.dart';
 import 'pages/desktop_dashboard_page.dart';
+import 'pages/desktop_debts_page.dart';
+import 'pages/desktop_investments_page.dart';
 import 'pages/desktop_recurring_page.dart';
 import 'pages/desktop_statistics_page.dart';
 import 'pages/desktop_support_pages.dart';
@@ -219,10 +221,14 @@ class _DesktopAppShellState extends State<DesktopAppShell> {
     DesktopDestination.recurring => DesktopRecurringPage(
       controller: widget.controller,
     ),
-    DesktopDestination.goals => DesktopGoalsPage(controller: widget.controller),
-    DesktopDestination.capital => DesktopAccountsPage(
+    DesktopDestination.liquidity => DesktopAccountsPage(
       controller: widget.controller,
     ),
+    DesktopDestination.investments => DesktopInvestmentsPage(
+      controller: widget.controller,
+    ),
+    DesktopDestination.debts => DesktopDebtsPage(controller: widget.controller),
+    DesktopDestination.goals => DesktopGoalsPage(controller: widget.controller),
     DesktopDestination.insights => DesktopInsightsPage(
       controller: widget.controller,
     ),
@@ -369,7 +375,7 @@ class _DesktopAppShellState extends State<DesktopAppShell> {
           ),
         );
       case _AddDataAction.account:
-        _select(DesktopDestination.accounts);
+        _select(DesktopDestination.liquidity);
     }
   }
 
